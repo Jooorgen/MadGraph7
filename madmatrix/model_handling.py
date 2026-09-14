@@ -757,14 +757,9 @@ class MadMatrixALOHAWriter(aloha_writers.ALOHAWriterForGPU):
                     if name in denominator_tmps:
                         dexpr = self.momenta_in_denom_precision(expr)
                     if dexpr is not None:
-                        # OM a custom propagator denominator (P.PBar P^2 in axial
-                        # gauge) is computed from the momenta in denominator
-                        # precision (double for FPTYPE=v): the cancellation in
-                        # E^2 - |p|^2 is what loses the digits. Its TMPs are
-                        # narrowed for the numerator, which stays in amplitude
-                        # precision; the other momenta-only TMPs stay as they
-                        # were (computing them in double costs ~4% for no
-                        # measurable gain)
+                        # tmp variable build from pure momenta
+                        #   - single precision is used only in the numerator
+                        #   - double precision is used in the denominator
                         self.pure_momentum_tmps.add(name)
                         out.write('    const fptype_denom_sv d%s = %s;\n' % (name, dexpr))
                         out.write('    const cxtype_amp_sv %s = fpamp_of_mom( d%s );\n' % (name, name))
