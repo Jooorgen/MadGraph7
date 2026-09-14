@@ -47,7 +47,7 @@ concept GoodFloatType = std::is_same_as<double, T> || std::is_same_as<float, T>;
 #endif
 
 
-FLOAT_TEMPLATE_GUARD
+template <GoodFloatType T>
 __cuda_callable__
 static constexpr __tnl_inline__ T
 add_rn( const T x, const T y )
