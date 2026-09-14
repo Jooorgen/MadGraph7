@@ -11,7 +11,7 @@ name: Release
 # one of those commits, so re-running them would test the same tree a second
 # time for ~250 duplicated jobs. require_green_ci below gates on that existing
 # run instead. (The suites also no longer trigger on tag pushes, for the same
-# reason -- see the tags-ignore note in each of them.)
+# reason -- see the push.branches note in each of them.)
 on:
   release:
     types: [published]
@@ -139,19 +139,52 @@ jobs:
             sleep "$POLL_INTERVAL_SECONDS"
           done
 
-  # Builds the full wheel matrix and publishes to PyPI. madspace is never
-  # released standalone, so this is the only path that ever sets publish: true.
-  # This one does have to run here: the CI build on main does not publish.
+  # Builds the wheels for every supported Python/platform. This one suite does
+  # have to run at release time: the CI build on main only builds the
+  # smoke-test subset, and nothing on main uploads to PyPI.
   madspace:
     needs: require_green_ci
     uses: ./.github/workflows/madspace.yml
     with:
-      publish: true
+      full_matrix: true
+
+  # Publishes the wheels madspace just built. This job MUST be defined here in
+  # release.yml rather than in madspace.yml, even though that is where the
+  # wheels are built: PyPI trusted publishing matches the OIDC job_workflow_ref
+  # claim, which names the workflow file the *job* is defined in, not the
+  # caller. A publish job inside the reusable workflow presents
+  #   job_workflow_ref: .../madspace.yml@refs/tags/vX.Y.Z
+  # and is rejected with "invalid-publisher" against the configured
+  # "Workflow: release.yml" publisher, which is what happened to v0.2.0 in
+  # run 34779296181. PyPI does not support reusable workflows here at all:
+  # https://docs.pypi.org/trusted-publishers/troubleshooting/#reusable-workflows-on-github
+  #
+  # The environment name below is also part of the publisher's claims -- the
+  # configured publisher sets Environment name: pypi, so dropping it would
+  # leave the claim MISSING and fail the same way.
+  publish_pypi:
+    name: Publish to PyPI
+    needs: madspace
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/madspace
+    permissions:
+      id-token: write  # IMPORTANT: mandatory for trusted publishing
+    steps:
+      - name: Download all the dists
+        uses: actions/download-artifact@v5
+        with:
+          pattern: cibw-*
+          path: dist
+          merge-multiple: true
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
 
   tarball:
     needs:
       - check_version
-      - madspace
+      - publish_pypi
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -206,6 +239,7 @@ jobs:
       - check_version
       - require_green_ci
       - madspace
+      - publish_pypi
       - tarball
     # 'skipped' has to count as a failure here: a job whose own guard is false,
     # or one whose dependency was skipped, is neither failure() nor cancelled(),
