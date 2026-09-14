@@ -7319,7 +7319,7 @@ MadGraph7 that supports quadruple precision (typically g++ based on gcc 4.6+).""
             # it MG5's nb_core unless an explicit -j was given on the line.
             if not any(a == '-j' or a.startswith('-j') or a.startswith('--jobs')
                        for a in install_args):
-                install_args = install_args + ['-j', str(self.get_nb_core())]
+                install_args = install_args + ['-j', str(self.options['nb_core'])]
             subprocess.run([sys.executable, install_script] + install_args)
             return
 
@@ -8489,7 +8489,7 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
             from madgraph.iolibs.template_files.mg7 import bootstrap as mg7_bootstrap
             mg7_bootstrap.ensure_madspace(
                 interactive=bool(self.use_rawinput) and not options['force'],
-                jobs=self.get_nb_core())
+                jobs=self.options['nb_core'])
             from madgraph.iolibs.template_files.mg7 import launch as mg7_launch
 
             MG7 = mg7_launch.MG7Cmd(me_dir=me_dir, options=self.options)

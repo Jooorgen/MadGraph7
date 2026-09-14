@@ -270,13 +270,13 @@ class MG7LaunchWiringTest(unittest.TestCase):
     def test_bootstrap_gets_nb_core_for_the_madspace_build(self):
         """A source build of madspace is only parallel when it is told how many
         jobs it may use, so the launch path must pass MG5's nb_core on."""
-        self.cmd.options['nb_core'] = 3
+        self.cmd.do_set('nb_core 3 --no_save')
         self.launch('')
         self.assertEqual(self.bootstrap_jobs, [3])
 
-        # left unset, nb_core resolves to the machine's core count
+        # `set nb_core None` resolves to the machine's core count
         self.bootstrap_jobs[:] = []
-        self.cmd.options['nb_core'] = None
+        self.cmd.do_set('nb_core None --no_save')
         self.launch('')
         self.assertEqual(self.bootstrap_jobs,
                          [multiprocessing.cpu_count()])
@@ -425,18 +425,18 @@ class MadspaceInstallCommandTest(unittest.TestCase):
     def test_nb_core_is_forwarded_as_the_job_count(self):
         """Without it the installer's cmake build is serial whenever ninja is
         missing, whatever nb_core says."""
-        self.cmd.options['nb_core'] = 5
+        self.cmd.do_set('nb_core 5 --no_save')
         args = self.installer_args('madspace --source -y')
         self.assertIn('install.py', args[1])
         self.assertEqual(args[-2:], ['-j', '5'])
 
     def test_unset_nb_core_uses_every_core(self):
-        self.cmd.options['nb_core'] = None
+        self.cmd.do_set('nb_core None --no_save')
         args = self.installer_args('madspace --source -y')
         self.assertEqual(args[-2:], ['-j', str(multiprocessing.cpu_count())])
 
     def test_an_explicit_job_count_is_left_alone(self):
-        self.cmd.options['nb_core'] = 5
+        self.cmd.do_set('nb_core 5 --no_save')
         for line in ('madspace --source -j 2', 'madspace --source -j2',
                      'madspace --source --jobs=2'):
             args = self.installer_args(line)
