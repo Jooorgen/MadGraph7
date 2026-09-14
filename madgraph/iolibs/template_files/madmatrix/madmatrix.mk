@@ -41,6 +41,8 @@ ifneq ($(words $(filter $(BACKEND), $(SUPPORTED_BACKENDS))),1)
   $(error Invalid backend BACKEND='$(BACKEND)': supported backends are $(foreach backend,$(SUPPORTED_BACKENDS),'$(backend)'))
 endif
 
+# 3 precision macros: amp (MGONGPU_FPTYPE_*), colour (MGONGPU_FPTYPE2_*), momenta/denom (MGONGPU_FPTYPE_MOMENTA_*)
+# 5 modes: d=all64, f=all32, m=color32 (colour FP32, momenta+amp FP64), v=denom64 (momenta/denom FP64, colour+amp FP32), e=doubleword expansion (compensated FP64-in-FP32 denom, see MADARITH_DOUBLEEXPANSION below)
 override SUPPORTED_FPTYPES = d f m e v
 ifneq ($(words $(filter $(FPTYPE), $(SUPPORTED_FPTYPES))),1)
   $(error Invalid fptype FPTYPE='$(FPTYPE)': supported fptypes are $(foreach fptype,$(SUPPORTED_FPTYPES),'$(fptype)'))
@@ -599,9 +601,9 @@ ifeq ($(GPUCC),)
 endif
 
 # Set the build flags appropriate to each FPTYPE choice (example: "make FPTYPE=f")
-$(info FPTYPE='$(FPTYPE)')
 # 3 precision macros: amp (MGONGPU_FPTYPE_*), colour (MGONGPU_FPTYPE2_*), momenta/denom (MGONGPU_FPTYPE_MOMENTA_*)
-# 4 modes: d=all64, f=all32, v=denom64, m=color32 (e for doubleword expansion)
+# 5 modes: d=all64, f=all32, m=color32 (colour FP32, momenta+amp FP64), v=denom64 (momenta/denom FP64, colour+amp FP32), e=doubleword expansion (compensated FP64-in-FP32 denom, see MADARITH_DOUBLEEXPANSION below)
+$(info FPTYPE='$(FPTYPE)')
 ifeq ($(FPTYPE),d) # all64
   CXXFLAGS += -DMGONGPU_FPTYPE_DOUBLE -DMGONGPU_FPTYPE2_DOUBLE
   GPUFLAGS += -DMGONGPU_FPTYPE_DOUBLE -DMGONGPU_FPTYPE2_DOUBLE
