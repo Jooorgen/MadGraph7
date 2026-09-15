@@ -494,8 +494,9 @@ class MadMatrixALOHAWriter(aloha_writers.ALOHAWriterForGPU):
                     element = 'fpamp_of_mom(%(sign)s%(type)s%(i)d.pvec[%(j)d])' % {'j':j,'type': type, 'i': i, 'sign': sign}
                     strfile.write(element + (', ' if j<3 else ''))
                 strfile.write(' };\n')
-                # dP array in denom precision for the outgoing particle only
-                if i == self.outgoing:
+                # dP array in denom precision: for the outgoing particle (its
+                # propagator denominator) and for every leg a momenta-only TMP uses
+                if i == self.outgoing or i in getattr(self, 'dp_needed', ()):
                     strfile.write('    const fptype_denom_sv dP%d[4] = { ' % i )
                     for j in range(4):
                         sign = self.get_P_sign(i) if self.get_P_sign(i) else '+'
@@ -664,6 +665,68 @@ class MadMatrixALOHAWriter(aloha_writers.ALOHAWriterForGPU):
             self.fct_format['pow'] = 'cxpow( %s, %s )'
         return super().get_fct_format(fct)
 
+    # OM - momenta-only expressions in denominator precision (FPTYPE=v: double)
+    _momentum_ref = re.compile(r'(?<![A-Za-z_0-9])P(\d+)\[(\d)\]')
+    _tmp_ref = re.compile(r'(?<![A-Za-z_0-9])(TMP\d+)(?![A-Za-z_0-9])')
+    _fp_constant = re.compile(r'(?<![A-Za-z_0-9])(one|two|half|quarter)(?![A-Za-z_0-9])')
+    _arithmetic_only = re.compile(r'^[\s()+\-*/.0-9eE]*$')
+
+    def momenta_in_denom_precision(self, expr):
+        """If the C++ expression *expr* only involves momenta (P1[0], ...),
+        numbers and the fptype constants, return it written with the momenta
+        and the constants in denominator precision (dP1[0], oned, ...), and
+        record the legs whose dP array it needs. Return None otherwise."""
+        legs = self._momenta_only(expr)
+        if not legs:
+            return None
+        self.dp_needed.update(legs)
+        dexpr = self._momentum_ref.sub(lambda m: 'dP%s[%s]' % m.groups(), expr)
+        return self._fp_constant.sub(r'\1d', dexpr)
+
+    def denominator_momentum_tmps(self):
+        """The TMPs of this routine's custom propagator denominator (e.g.
+        (P.PBar) P^2 in axial gauge) when that denominator is made only of
+        momenta-only TMPs: those, and only those, are computed in denominator
+        precision. An empty set when there is no such denominator."""
+        denominator = getattr(self.routine, 'denominator', None)
+        if not self.offshell or 'L' in self.tag or aloha.complex_mass or \
+                denominator is None or str(denominator) == '1' or \
+                not self.routine.contracted:
+            return set()
+        denominator = str(denominator)
+        tmps = set(self._tmp_ref.findall(denominator))
+        rest = self._fp_constant.sub(' ', self._tmp_ref.sub(' ', denominator))
+        if not tmps or not self._arithmetic_only.match(rest):
+            return set()
+        for tmp in tmps:
+            obj = self.routine.contracted.get(tmp)
+            if obj is None or not self._momenta_only(self.write_obj(obj)):
+                return set()
+        return tmps
+
+    def _momenta_only(self, expr):
+        """The legs whose momenta *expr* uses, if it only involves momenta,
+        numbers and the fptype constants; an empty set otherwise."""
+        if aloha.loop_mode:
+            return set()
+        legs = set(int(leg) for leg, _ in self._momentum_ref.findall(expr))
+        rest = self._fp_constant.sub(' ', self._momentum_ref.sub(' ', expr))
+        if not legs or not self._arithmetic_only.match(rest):
+            return set()
+        return legs
+
+    def denominator_in_denom_precision(self, denominator):
+        """A custom propagator denominator (e.g. (P.PBar) P^2 in axial gauge)
+        made only of momenta-only TMPs is evaluated in denominator precision,
+        from their dTMP versions. Anything else is returned unchanged."""
+        tmps = self._tmp_ref.findall(denominator)
+        if not tmps or not all(tmp in self.pure_momentum_tmps for tmp in tmps):
+            return denominator
+        rest = self._fp_constant.sub(' ', self._tmp_ref.sub(' ', denominator))
+        if not self._arithmetic_only.match(rest):
+            return denominator
+        return self._fp_constant.sub(r'\1d', self._tmp_ref.sub(r'd\1', denominator))
+
     # AV - modify aloha_writers.ALOHAWriterForCPP method (improve formatting)
     # This is called once per FFV function, i.e. once per WriteALOHA instance?
     # It is called by WriteALOHA.write, after get_header_txt, get_declaration_txt, get_momenta_txt, before get_foot_txt
@@ -675,6 +738,13 @@ class MadMatrixALOHAWriter(aloha_writers.ALOHAWriterForGPU):
         """Write the helicity amplitude in C++ format"""
         out = StringIO()
         ###out.write('    mgDebug( 0, __FUNCTION__ );\n') # AV - NO! move to get_declaration.txt
+        # OM the TMPn computed in denominator precision (those of a custom
+        # propagator denominator), and the legs whose momenta they need in that
+        # precision (read by get_one_momenta_def, which WriteALOHA.write calls
+        # after this method)
+        self.pure_momentum_tmps = set()
+        self.dp_needed = set()
+        denominator_tmps = self.denominator_momentum_tmps() if self.nodeclare else set()
         if self.routine.contracted:
             keys = sorted(self.routine.contracted.keys())
             for name in keys:
@@ -682,8 +752,20 @@ class MadMatrixALOHAWriter(aloha_writers.ALOHAWriterForGPU):
                 # This affects 'TMP0 = ' in HelAmps_sm.cc
                 ###out.write(' %s = %s;\n' % (name, self.write_obj(obj)))
                 if self.nodeclare:
-                    out.write('    const cxtype_amp_sv %s = %s;\n' %
-                              (name, self.write_obj(obj))) # AV
+                    expr = self.write_obj(obj)
+                    dexpr = None
+                    if name in denominator_tmps:
+                        dexpr = self.momenta_in_denom_precision(expr)
+                    if dexpr is not None:
+                        # tmp variable build from pure momenta
+                        #   - single precision is used only in the numerator
+                        #   - double precision is used in the denominator
+                        self.pure_momentum_tmps.add(name)
+                        out.write('    const fptype_denom_sv d%s = %s;\n' % (name, dexpr))
+                        out.write('    const cxtype_amp_sv %s = fpamp_of_mom( d%s );\n' % (name, name))
+                    else:
+                        out.write('    const cxtype_amp_sv %s = %s;\n' %
+                                  (name, expr)) # AV
                 else:
                     out.write('    %s = %s;\n' % (name, self.write_obj(obj))) # AV
                     self.declaration.add(('complex', name))
@@ -780,7 +862,8 @@ class MadMatrixALOHAWriter(aloha_writers.ALOHAWriterForGPU):
                         if self.routine.denominator == '1':
                             out.write('    %(declnamedenom)s = %(pre_coup)s%(coup)s%(post_coup)s;\n' % mydict) # AV
                         else:
-                            mydict['denom'] = self.routine.denominator
+                            mydict['denom'] = self.denominator_in_denom_precision(
+                                                   str(self.routine.denominator))
                             out.write('    %(declnamedenom)s = %(pre_coup)s%(coup)s%(post_coup)s / ( %(denom)s );\n' % mydict) # AV
                     else:
                         mydict['cId'] = 'cId'  # once per combined
@@ -1132,6 +1215,8 @@ class MadMatrixALOHAWriter(aloha_writers.ALOHAWriterForGPU):
         for writer in writers_l[1:]:
             for entry in writer.declaration:
                 main.declaration.add(entry)
+            # the momenta are declared once for all the structures
+            main.dp_needed |= writer.dp_needed
 
         text = StringIO()
         text.write(main.get_header_txt(name=name, couplings=new_couplings,
@@ -1151,7 +1236,7 @@ class MadMatrixALOHAWriter(aloha_writers.ALOHAWriterForGPU):
         # the same constexpr fptype) is built by several of them: a given name
         # always stands for the same value, keep the first definition only
         declared = re.compile(r'^(?:const|constexpr)\s+\S+\s+'
-                              r'((?:TMP|FCT)\d+|(?:one|two|half|quarter)d?|cId)\s*[=(]')
+                              r'((?:d?TMP|FCT)\d+|(?:one|two|half|quarter)d?|cId)\s*[=(]')
         seen = set()
         for body in bodies:
             for line in body.splitlines(True):
