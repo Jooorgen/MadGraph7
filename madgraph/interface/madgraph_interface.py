@@ -9057,14 +9057,18 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
         by the diagonal CKM). Nothing is removed or changed here: this only
         reads values, so the report can not alter the resulting model."""
 
+        # done before the header so that the (noisy) log of the model import
+        # does not land in the middle of the report
         base = model_reader.ModelReader(
                         import_ufo.import_model(model_path, restrict=False))
+        logger.info('Restriction report: analysing %d choice(s), one '
+                    'evaluation of the couplings each', len(groups))
 
         unrestricted = check_param_card.ParamCard(default_card)
         self.randomize_param_card(unrestricted, externals)
         restricted = check_param_card.ParamCard(unrestricted)
         self.apply_customize_rules(restricted, categories, set_zero, set_one,
-                                                                      set_equal)
+                                                                     set_equal)
 
         # what is already zero/fused without any restriction is a property of
         # the model, not something the user did
@@ -9073,8 +9077,12 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
         all_zero -= base_zero
         all_fused -= base_fused
         base_pdrop, base_pfuse = self.get_parameter_classes(unrestricted, externals)
+        logger.info('  in total: %d coupling(s) dropped, %d fused (%d and %d are'
+                    ' already so in the unrestricted model)',
+                    len(all_zero), len(all_fused), len(base_zero), len(base_fused))
 
-        # what each choice does on its own
+        # what each choice does on its own. Reported as it is computed: on a
+        # large model each of those is a full evaluation of the couplings.
         alone = []
         for label, keys in groups:
             probe = check_param_card.ParamCard(unrestricted)
@@ -9088,45 +9096,48 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
             pdrop, pfuse = self.get_parameter_classes(probe, externals)
             alone.append((label, zero - base_zero, fused - base_fused,
                           (pdrop - base_pdrop) | (pfuse - base_pfuse)))
+            self.log_restriction_group(base, alone[-1])
 
-        explained = set()
+        # the cross-choice information is only available once they all ran
+        explained, shared = set(), set()
         for label, zero, fused, params in alone:
             explained |= zero | fused
-        conjunction = (all_zero | all_fused) - explained
-
-        logger.info('Restriction report: your choices drop %d coupling(s) and '
-                    'fuse %d (%d/%d are already so in the unrestricted model)',
-                    len(all_zero), len(all_fused), len(base_zero), len(base_fused))
         for label, zero, fused, params in alone:
-            if not zero and not fused and not params:
-                logger.info('  %-38s changes nothing', label)
-                continue
-            nb_removed, nb_modified = self.get_interaction_impact(base, zero)
-            logger.info('  %-38s %d coupling(s) dropped, %d fused, %d '
-                        'interaction(s) removed%s', label, len(zero), len(fused),
-                        nb_removed,
-                        ', %d modified' % nb_modified if nb_modified else '')
-            if zero:
-                logger.info('  %-38s   dropped: %s', '', self.short_list(zero))
-            if fused:
-                logger.info('  %-38s   fused:   %s', '', self.short_list(fused))
-            if params:
-                logger.info('  %-38s   %d parameter(s) leave the param_card', '',
-                            len(params))
             others = set()
             for label2, zero2, fused2, params2 in alone:
                 if label2 != label:
                     others |= zero2 | fused2
-            shared = (zero | fused) & others
-            if shared:
-                logger.info('  %-38s   %d coupling(s) are also covered by '
-                            'another of your choices', '', len(shared))
+            shared |= (zero | fused) & others
+        conjunction = (all_zero | all_fused) - explained
+
+        if shared:
+            logger.info('  %d coupling(s) are covered by more than one of your '
+                        'choices: %s', len(shared), self.short_list(shared))
         if conjunction:
-            logger.info('  %-38s %d coupling(s): %s',
-                        'only through several choices at once:',
-                        len(conjunction), self.short_list(conjunction))
+            logger.info('  %d coupling(s) only through several choices at once:'
+                        ' %s', len(conjunction), self.short_list(conjunction))
 
         return alone, (base_zero, base_fused), conjunction
+
+    def log_restriction_group(self, model, entry):
+        """the part of the --explain report which concerns a single choice"""
+
+        label, zero, fused, params = entry
+        if not zero and not fused and not params:
+            logger.info('  %-38s changes nothing', label)
+            return
+        nb_removed, nb_modified = self.get_interaction_impact(model, zero)
+        logger.info('  %-38s %d coupling(s) dropped, %d fused, %d '
+                    'interaction(s) removed%s', label, len(zero), len(fused),
+                    nb_removed,
+                    ', %d modified' % nb_modified if nb_modified else '')
+        if zero:
+            logger.info('  %-38s   dropped: %s', '', self.short_list(zero))
+        if fused:
+            logger.info('  %-38s   fused:   %s', '', self.short_list(fused))
+        if params:
+            logger.info('  %-38s   %d parameter(s) leave the param_card', '',
+                        len(params))
 
     @staticmethod
     def short_list(names, nb=8):

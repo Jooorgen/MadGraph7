@@ -33,7 +33,9 @@ ANNOUNCEMENT:
        param_card, plus the couplings that several of your choices would remove
        independently. The attribution is done by evaluating the couplings once
        per choice with that choice -and only that one- applied, so it reads
-       values only and can not change the resulting model.
+       values only and can not change the resulting model. Each choice is
+       reported as soon as it is evaluated, since on a large model every one of
+       them is a full evaluation of the couplings.
        Fix as well 'customize_model' being unusable from a script (the answer to the
        question was not returned to the command) and the resulting model not being
        flavour-grouped/multiparticle-refreshed as 'import model NAME-restriction' is.
