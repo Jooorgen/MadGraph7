@@ -61,7 +61,12 @@ ANNOUNCEMENT:
        so far do to each of them, the second the couplings with their expression.
        Both accept a block name or a part of a name to filter on, and looking up
        an internal parameter shows its formula (which is why it can not be
-       restricted).
+       restricted). When the argument selects a few couplings/parameters, every
+       parameter of their definition is unfolded recursively down to the entries
+       of the param_card, the restricted ones are highlighted, and a last line
+       names the ones the expression depends on: that is the answer to 'why is
+       that coupling dropped?'. An exact name wins over a substring, so
+       'display couplings GC_1' is about GC_1 and not about GC_1, GC_10, ...
        Fix as well 'customize_model' being unusable from a script (the answer to the
        question was not returned to the command) and the resulting model not being
        flavour-grouped/multiparticle-refreshed as 'import model NAME-restriction' is.

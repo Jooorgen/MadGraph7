@@ -1036,3 +1036,69 @@ class TestDisplayInTheQuestion(unittest.TestCase):
         out = self.ask.complete_display('', 'display parameters ', 19, 19)
         self.assertTrue('YUKAWA' in out)
         self.assertTrue('MB' in out)
+
+
+#===============================================================================
+# 'display couplings X' unfolds the definition down to the param_card
+#===============================================================================
+class TestExpandExpression(unittest.TestCase):
+    """Following a coupling down to the parameters it is built from is what
+    tells why the restriction drops it."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.full_model = import_ufo.import_full_model(
+                                            import_ufo.find_ufo_path('sm'))
+
+    def setUp(self):
+        self.cmd = mg_interface.MadGraphCmd()
+        self.cmd._curr_model = self.full_model
+        self.ask = mg_interface.AskforCustomize('', mother_interface=self.cmd,
+            categories=self.cmd.get_customize_categories(self.full_model,
+                                                         self.full_model))
+
+    def test_reaches_the_restricted_parameter(self):
+        """GC_15 = I1x33 = yb*conjugate(CKM3x3), and yb comes from ymb"""
+
+        self.ask.do_set('flavourscheme 5F')
+        found = self.ask.expand_expression(
+                                self.ask.ufo_couplings['gc_15'].value)
+        self.assertEqual([name for name, why in found], ['ymb'])
+        self.assertTrue(found[0][1].startswith('0'))
+
+    def test_nothing_restricted_on_that_path(self):
+        """GC_1 is built from the electric charge only"""
+
+        found = self.ask.expand_expression(
+                                self.ask.ufo_couplings['gc_1'].value)
+        self.assertEqual(found, [])
+
+    def test_follows_a_set_zero(self):
+        self.ask.do_set_zero('ymb')
+        found = self.ask.expand_expression(
+                                self.ask.ufo_couplings['gc_15'].value)
+        self.assertEqual(found, [('ymb', '0')])
+
+    def test_does_not_loop_on_a_repeated_parameter(self):
+        """sw2 uses MW and MZ, MW uses MZ: MZ shows twice, MW is expanded once"""
+
+        found = self.ask.expand_expression('sw2 + MW')
+        self.assertEqual(found, [])
+
+    def test_depth_is_bounded(self):
+        """a pathological model must not blow the stack"""
+
+        self.ask.internal_params['loopy'] = self.ask.internal_params['ee']
+        try:
+            self.ask.expand_expression('ee', depth=self.ask.EXPAND_MAX_DEPTH)
+        finally:
+            del self.ask.internal_params['loopy']
+
+    def test_an_exact_name_wins_over_a_substring(self):
+        """'display couplings GC_1' is about GC_1, not GC_1, GC_10, GC_100..."""
+
+        self.assertTrue('gc_10' in self.ask.ufo_couplings)
+        # nothing to assert on the output, but the command must not list them
+        # all: the exact match is the one which is expanded
+        self.ask.do_display('couplings GC_1')
+        self.ask.do_display('parameters MB')

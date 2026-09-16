@@ -12979,11 +12979,19 @@ class AskforCustomize(cmd.SmartQuestion):
 
         pattern = args[0].lower() if args else None
         restricted = self.get_current_restrictions()
+        exact = self.external_params.get(pattern, None)
+
+        def match(param):
+            if pattern is None:
+                return True
+            if exact is not None:
+                return param is exact # an exact name wins over a substring
+            return pattern == param.lhablock.lower() or \
+                   pattern in param.name.lower()
 
         selected = {}
         for param in self.external_params.values():
-            if pattern is None or pattern == param.lhablock.lower() \
-                               or pattern in param.name.lower():
+            if match(param):
                 selected.setdefault(param.lhablock, []).append(param)
 
         if not selected:
@@ -13017,22 +13025,95 @@ class AskforCustomize(cmd.SmartQuestion):
 
         if pattern is None:
             return False
-        matching = [param for param in self.internal_params.values()
-                    if pattern in param.name.lower()]
+        if pattern in self.internal_params:
+            matching = [self.internal_params[pattern]]
+        else:
+            matching = [param for param in self.internal_params.values()
+                        if pattern in param.name.lower()]
         if not matching:
             return False
         logger.info('internal parameter(s) (computed from the ones of the '
                     'param_card, they can not be restricted):')
         for param in sorted(matching, key=lambda p: self.natural_key(p.name)):
             logger.info('    %-22s = %s', param.name, param.value)
+            if len(matching) <= self.EXPAND_MAX_MATCH:
+                self.log_expansion_conclusion(param.name,
+                                    self.expand_expression(param.value))
         return True
+
+    # a definition is unfolded only when the user asked for a few of them, and
+    # only down to that many levels
+    EXPAND_MAX_MATCH = 5
+    EXPAND_MAX_DEPTH = 8
+
+    def expand_expression(self, expr, depth=1, seen=None, restricted=None,
+                                                                   found=None):
+        """print the definition of every parameter appearing in expr, and
+        recursively of the ones appearing in those definitions, down to the
+        parameters of the param_card. That is where a coupling which is dropped
+        comes from, so the ones the current choices restrict are marked.
+        Return the restricted parameters the expression depends on."""
+
+        if seen is None:
+            seen = set()
+        if restricted is None:
+            restricted = self.get_current_restrictions()
+        if found is None:
+            found = []
+        if depth > self.EXPAND_MAX_DEPTH:
+            logger.info('%s...', '    ' * (depth + 1))
+            return found
+
+        indent = '    ' * (depth + 1)
+        for name in self.get_variables(str(expr)):
+            param = self.external_params.get(name, None)
+            if param is not None:
+                # a parameter of the param_card: this is where it stops, and
+                # where the reason of a drop is to be found
+                key = (param.lhablock.lower(), tuple(param.lhacode))
+                logger.info('%s%-22s = %-12s (%s %s)%s' % (indent, param.name,
+                            self.format_value(param.value), param.lhablock,
+                            list(param.lhacode),
+                            '   -> %s' % restricted[key] if key in restricted
+                            else ''),
+                            '$MG:BOLD' if key in restricted else '$MG:color:BLACK')
+                if key in restricted and (param.name, restricted[key]) not in found:
+                    found.append((param.name, restricted[key]))
+                continue
+            param = self.internal_params.get(name, None)
+            if param is None:
+                continue # a function of the model, a number, ...
+            if name in seen:
+                logger.info('%s%-22s = (see above)', indent, param.name)
+                continue
+            seen.add(name)
+            logger.info('%s%-22s = %s', indent, param.name, param.value)
+            self.expand_expression(param.value, depth + 1, seen, restricted, found)
+        return found
+
+    @staticmethod
+    def log_expansion_conclusion(name, found):
+        """the one line answer to 'why is that one dropped?'"""
+
+        if not found:
+            logger.info('    %s does not depend on any parameter your choices '
+                        'restrict.' % name, '$MG:color:BLUE')
+            return
+        logger.info('    %s depends on %s' % (name,
+                    ', '.join('%s -> %s' % entry for entry in found)),
+                    '$MG:color:GREEN')
 
     def display_couplings(self, args):
         """the couplings of the model, with their expression"""
 
         pattern = args[0].lower() if args else None
-        matching = [coupling for coupling in self.ufo_couplings.values()
-                    if pattern is None or pattern in coupling.name.lower()]
+        if pattern in self.ufo_couplings:
+            # an exact name wins: 'display couplings GC_1' is about GC_1, not
+            # about GC_1, GC_10, GC_100, ...
+            matching = [self.ufo_couplings[pattern]]
+        else:
+            matching = [coupling for coupling in self.ufo_couplings.values()
+                        if pattern is None or pattern in coupling.name.lower()]
         if not matching:
             logger.info('No coupling of this model matches \'%s\'.', args[0])
             return
@@ -13041,7 +13122,11 @@ class AskforCustomize(cmd.SmartQuestion):
                         'of one- to list them.', len(matching))
             return
         for coupling in sorted(matching, key=lambda c: self.natural_key(c.name)):
-            logger.info('    %-14s = %s', coupling.name, coupling.value)
+            logger.info('    %-14s = %s' % (coupling.name, coupling.value),
+                        '$MG:BOLD')
+            if len(matching) <= self.EXPAND_MAX_MATCH:
+                self.log_expansion_conclusion(coupling.name,
+                                    self.expand_expression(coupling.value))
 
     @staticmethod
     def format_value(value):
@@ -13226,7 +13311,11 @@ class AskforCustomize(cmd.SmartQuestion):
         print('   clear                  : forget all those modifications')
         print('   display parameters [X] : the parameters of the model (all of')
         print('                            them, or the block/names matching X)')
-        print('   display couplings [X]  : the couplings, with their expression')
+        print('   display couplings [X]  : the couplings, with their expression.')
+        print('                            When X selects a few of them, every')
+        print('                            parameter of the expression is')
+        print('                            unfolded down to the param_card, so')
+        print('                            that one sees why one is dropped.')
         print('')
         print('The \'set\' command is a shortcut for the three of them when its')
         print('first argument is a parameter of the model:')
