@@ -560,3 +560,32 @@ class TestModel_interface(unittest.TestCase):
 
         self.cmd.exec_cmd('import model loop_qcd_qed_sm_a0')
         self.assertTrue(self.cmd._curr_model.get('startfromalpha0'))
+
+
+class CheckDisplayWithoutProcessTest(unittest.TestCase):
+    """'display processes' before anything is generated has to say so, not die.
+
+    _fks_multi_proc only exists once an NLO process has been generated, and
+    check_display read it unconditionally.
+    """
+
+    def setUp(self):
+        import madgraph.interface.master_interface as cmd
+        self.cmd = cmd.MasterCmd()
+        self.cmd.do_import('model sm')
+
+    def test_it_raises_invalid_cmd(self):
+        self.assertFalse(hasattr(self.cmd, '_fks_multi_proc'))
+        for what in ['processes', 'diagrams', 'diagrams_text']:
+            try:
+                self.cmd.check_display([what])
+            except AttributeError as error:
+                self.fail('check_display(%r) raised %s' % (what, error))
+            except Exception as error:
+                self.assertTrue('No process generated' in str(error), what)
+            else:
+                self.fail('check_display(%r) accepted an empty session' % what)
+
+    def test_it_accepts_a_generated_process(self):
+        self.cmd.do_generate('e+ e- > mu+ mu-')
+        self.cmd.check_display(['processes'])   # must not raise

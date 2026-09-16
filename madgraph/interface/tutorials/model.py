@@ -77,7 +77,11 @@ the handful shipped in `models/`. `import model NAME` fetches one on demand.""",
 
 'coupling_order': """The coupling orders the model declares -- QCD, QED and
 whatever else it defines -- with the hierarchy MG5 uses to decide what a
-process means when you do not spell the orders out.""",
+process means when you do not spell the orders out.
+
+Worth a look before you generate anything in a model you do not know: those
+names are what you constrain to keep the diagrams you want and drop the rest,
+as in `generate p p > t t~ QED=0`. The `syntax` tutorial does that properly.""",
 
 'lorentz': """The Lorentz structures the vertices are built from.
 `display lorentz NAME` shows one of them.""",

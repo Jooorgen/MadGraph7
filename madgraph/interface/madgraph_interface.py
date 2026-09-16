@@ -1127,9 +1127,13 @@ class CheckValidForCmd(cmd.CheckCmd):
         if not self._curr_model:
             raise self.InvalidCmd("No model currently active, please import a model!")
 
-# check that either _curr_amps or _fks_multi_proc exists
-        if (args[0] in ['processes', 'diagrams', 'diagrams_text'] and not self._curr_amps and not self._fks_multi_proc):
-           raise self.InvalidCmd("No process generated, please generate a process!")
+        # check that either _curr_amps or _fks_multi_proc exists.
+        # _fks_multi_proc is only created when an NLO process is generated, so
+        # it is read with getattr: without it 'display processes' before any
+        # process died with an AttributeError instead of saying so.
+        if args[0] in ['processes', 'diagrams', 'diagrams_text'] and \
+                not self._curr_amps and not getattr(self, '_fks_multi_proc', None):
+            raise self.InvalidCmd("No process generated, please generate a process!")
         if args[0] == 'checks' and not self._comparisons and not self._cms_checks:
             raise self.InvalidCmd("No check results to display.")
 

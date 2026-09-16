@@ -1760,6 +1760,20 @@ class StickyStepTest(unittest.TestCase):
             # every one of them hands the user back to the tutorial
             self.assertTrue('import model sm-no_b_mass' in note, what)
 
+    def test_coupling_order_points_at_the_syntax_tutorial(self):
+        """the orders are what one constrains to filter the diagrams"""
+
+        import madgraph.interface.tutorials as tutorials
+        import madgraph.interface.tutorials.model as model
+
+        note = model.display_note(None, 'display coupling_order')
+        self.assertTrue('QED=0' in note)
+        self.assertTrue('syntax' in note)
+        # and that tutorial does exist, and does teach it
+        self.assertNotEqual(tutorials.get('syntax'), None)
+        self.assertTrue('coupling orders' in
+                        [s.title for s in tutorials.get('syntax').steps])
+
     def test_an_unknown_display_still_answers(self):
         import madgraph.interface.tutorials.model as model
 
