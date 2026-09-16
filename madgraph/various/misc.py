@@ -451,9 +451,13 @@ def activate_dependence(dependency, cmd=None, log = None, MG5dir=None):
         raise MadGraph5Error('Samurai cannot yet be automatically installed.') 
 
     if dependency=='ninja':
+        # the option points to the library directory itself (./HEPTools/lib),
+        # but some installations keep ninja in its own subdirectory, so look
+        # for libninja.a both directly there and one 'lib' level below.
         if cmd.options['ninja'] in ['None',None,''] or\
          (cmd.options['ninja'] == './HEPTools/lib' and not MG5dir is None and\
-         which_lib(pjoin(MG5dir,cmd.options['ninja'],'lib','libninja.a')) is None):
+         all(which_lib(pjoin(MG5dir,cmd.options['ninja'],subdir,'libninja.a'))\
+                                is None for subdir in ['lib',''])):
             tell("Installing ninja...")
             cmd.do_install('ninja')
  
