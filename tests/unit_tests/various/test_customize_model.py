@@ -435,3 +435,83 @@ class TestAskforModelName(unittest.TestCase):
             self.assertEqual(
                 self.question.special_check_answer_in_input_file(line, 'x'),
                 None, '%s should not be taken as a model name' % line)
+
+
+#===============================================================================
+# customize_model --explain
+#===============================================================================
+class TestExplainRestriction(unittest.TestCase):
+    """The attribution of each removal to one of the user choices"""
+
+    def setUp(self):
+        self.cmd = mg_interface.MadGraphCmd()
+        self.card = check_param_card.ParamCard("""
+Block mass
+    4 0.0 # mc
+    5 2.0 # mb
+    6 2.0 # mt
+   23 1.0 # mz
+Block yukawa
+    5 2.0 # ymb
+DECAY 6 0.0 # wt
+DECAY 23 0.0 # wz
+""".split('\n'))
+        self.externals = set([('mass', (4,)), ('mass', (5,)), ('mass', (6,)),
+                              ('mass', (23,)), ('yukawa', (5,)),
+                              ('decay', (6,)), ('decay', (23,))])
+
+    def test_parameter_classes(self):
+        """0/1 leave the card, and so do the duplicates of a same block"""
+
+        dropped, fused = self.cmd.get_parameter_classes(self.card, self.externals)
+        # MC = 0, MZ = 1 and the two zero widths become internal parameters
+        self.assertEqual(dropped, set([('mass', (4,)), ('mass', (23,)),
+                                       ('decay', (6,)), ('decay', (23,))]))
+        # MB and MT share their value, ymb only shares it across blocks
+        self.assertEqual(fused, set([('mass', (5,)), ('mass', (6,))]))
+
+    def test_zero_widths_are_not_fused(self):
+        """two particles with a zero width are not two identical parameters"""
+
+        dropped, fused = self.cmd.get_parameter_classes(self.card, self.externals)
+        self.assertFalse([k for k in fused if k[0] == 'decay'])
+        # they are zero, so they do leave the card
+        self.assertTrue(('decay', (6,)) in dropped)
+
+    def test_only_the_external_parameters_are_considered(self):
+        """the informative entries of a param_card are not model parameters"""
+
+        dropped, fused = self.cmd.get_parameter_classes(self.card, set())
+        self.assertEqual(dropped, set())
+        self.assertEqual(fused, set())
+
+
+class TestRestrictionGroups(unittest.TestCase):
+    """The user choices, as the units --explain attributes a removal to"""
+
+    def setUp(self):
+        self.cmd = mg_interface.MadGraphCmd()
+        self.category = build_restrict_lib.Category('test')
+        self.category.add_options(name='massless b', default=True,
+                             rules=[('MASS', [5], 0.0), ('YUKAWA', [5], 0.0)])
+        self.category.add_options(name='not selected', default=False,
+                             rules=[('MASS', [4], 0.0)])
+        self.category.append(build_restrict_lib.ChoiceOption('scheme',
+                    [('a', [('MASS', [6], 0.0)]), ('b', [])], 'a'))
+
+    def test_groups(self):
+        groups = self.cmd.get_restriction_groups([self.category],
+                    set_zero=[('YUKAWA', (6,))], set_one=[],
+                    identify=[(('MASS', (5,)), ('MASS', (6,)))],
+                    lha2name={('YUKAWA', (6,)): 'ymt', ('MASS', (5,)): 'MB',
+                              ('MASS', (6,)): 'MT'})
+        labels = [label for label, keys in groups]
+        # an option which is not selected has no rule, so it is not a group
+        self.assertEqual(labels, ['massless b', 'scheme = a', 'set_zero ymt',
+                                  'identify MB MT'])
+        keys = dict(groups)
+        # the rules of an option are grouped together
+        self.assertEqual(keys['massless b'],
+                         set([('mass', (5,)), ('yukawa', (5,))]))
+        self.assertEqual(keys['scheme = a'], set([('mass', (6,))]))
+        self.assertEqual(keys['set_zero ymt'], set([('yukawa', (6,))]))

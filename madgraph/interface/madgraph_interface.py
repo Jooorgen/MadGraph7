@@ -21,6 +21,7 @@ from __future__ import absolute_import
 import atexit
 import collections
 import cmath
+import math
 import glob
 import logging
 import operator
@@ -544,6 +545,8 @@ class HelpToCmd(cmd.HelpCmd):
         logger.info("    available for future import with the command 'import model XXXX-NAME'")
         logger.info("    Changing the formula of a parameter/coupling is also possible but")
         logger.info("    requires to write a new UFO model (and is not compatible with --save)")
+        logger.info("    --explain reports which of your choices is responsible for each")
+        logger.info("    coupling removed from the model.")
 
     def help_output(self):
         logger.info("syntax: output [" + "|".join(self._export_formats) + \
@@ -1673,16 +1676,15 @@ This will take effect only in a NEW terminal
         """check the validity of the line"""
 
         # Check argument validity
-        if len(args) >1 :
+        for arg in args:
+            if arg == '--explain':
+                continue
+            if arg.startswith('--save='):
+                if '-' in arg.split('=', 1)[1]:
+                    raise self.InvalidCmd('The name given in save options can\'t contain \'-\' symbol.')
+                continue
             self.help_customize_model()
-            raise self.InvalidCmd('No argument expected for this command')
-
-        if len(args):
-            if not args[0].startswith('--save='):
-                self.help_customize_model()
-                raise self.InvalidCmd('Wrong argument for this command')
-            if '-' in args[0][6:]:
-                raise self.InvalidCmd('The name given in save options can\'t contain \'-\' symbol.')
+            raise self.InvalidCmd('Wrong argument for this command')
 
         if self._model_v4_path:
             raise self.InvalidCmd('Restriction of Model is not supported by v4 model.')
@@ -2484,8 +2486,7 @@ class CompleteForCmd(cmd.CompleteCmd):
         args = self.split_arg(line[0:begidx])
 
         # Format
-        if len(args) == 1:
-            return self.list_completion(text, ['--save='])
+        return self.list_completion(text, ['--save=', '--explain'])
 
 
     def complete_check(self, text, line, begidx, endidx, formatting=True):
@@ -8923,30 +8924,245 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
 
         return param_card
 
+    #===========================================================================
+    # customize_model --explain: which choice removed which coupling
+    #===========================================================================
+    def get_restriction_groups(self, categories, set_zero, set_one, identify,
+                                                                      lha2name):
+        """the user choices, as (label, set of (lhablock, lhacode)) pairs. Those
+        are the units the removal of a coupling is attributed to."""
+
+        # lha2name is keyed with the block as the UFO spells it
+        by_lha = dict(((key[0].lower(), key[1]), value)
+                      for key, value in lha2name.items())
+
+        def name(key):
+            return by_lha.get(key, '%s %s' % (key[0], list(key[1])))
+
+        groups = []
+        for category in categories:
+            for option in self.group_options(category):
+                keys = set()
+                for rule in option:
+                    keys.update((lhablock.lower(), tuple(lhacode))
+                        for lhablock, lhacode, value in rule.get_rules())
+                if not keys:
+                    continue # option not selected
+                label = option[0].name
+                if isinstance(option[0], build_restrict_lib.ChoiceOption):
+                    label = '%s = %s' % (label, option[0].status)
+                groups.append((label, keys))
+
+        for command, entries in [('set_zero', set_zero), ('set_one', set_one)]:
+            for key in entries:
+                key = (key[0].lower(), tuple(key[1]))
+                groups.append(('%s %s' % (command, name(key)), set([key])))
+        for target, source in identify:
+            target = (target[0].lower(), tuple(target[1]))
+            groups.append(('identify %s %s' % (name(target),
+                       name((source[0].lower(), tuple(source[1])))), set([target])))
+
+        return groups
+
+    @staticmethod
+    def get_parameter_classes(param_card, externals):
+        """what the restriction does to the param_card itself for those values:
+        (the external parameters it turns internal because they are 0 or 1, the
+        ones it fuses because they share the value of another one of the same
+        block). Mirrors detect_special_parameters/detect_identical_parameters."""
+
+        dropped, by_value = set(), {}
+        for block in param_card:
+            if block.startswith(('qnumbers', 'decay_table')) or 'info' in block:
+                continue
+            for param in param_card[block]:
+                key = (block.lower(), tuple(param.lhacode))
+                if key not in externals:
+                    continue
+                try:
+                    value = float(param.value)
+                except (TypeError, ValueError):
+                    continue
+                if value in (0., 1.):
+                    dropped.add(key)
+                elif block.lower() != 'decay': # widths are never fused
+                    by_value.setdefault((block.lower(), abs(value)), []).append(key)
+
+        fused = set()
+        for keys in by_value.values():
+            if len(keys) > 1:
+                fused.update(keys)
+        return dropped, fused
+
+    @staticmethod
+    def get_coupling_classes(model, param_card):
+        """evaluate all the couplings for the values of param_card and return
+        (the ones the restriction would drop, the ones it would fuse with at
+        least one other). Same thresholds/rounding as detect_identical_couplings
+        so that the report matches what the restriction really does."""
+
+        def rounded(value):
+            out = []
+            for part in (value.real, value.imag):
+                if part:
+                    part = round(part,
+                        int(abs(round(math.log(abs(part), 10), 0)) + 10))
+                out.append(part)
+            return tuple(out)
+
+        model.set_parameters_and_couplings(check_param_card.ParamCard(param_card))
+        zero, by_value = set(), {}
+        for name, value in model.get('coupling_dict').items():
+            value = complex(value)
+            if abs(value) < 1e-13:
+                zero.add(name)
+            else:
+                by_value.setdefault(rounded(value), []).append(name)
+
+        fused = set()
+        for names in by_value.values():
+            if len(names) > 1:
+                fused.update(names)
+        return zero, fused
+
+    @staticmethod
+    def get_interaction_impact(model, couplings):
+        """(removed, modified) number of interactions if couplings are zero"""
+
+        removed, modified = 0, 0
+        for vertex in model.get('interactions'):
+            names = set()
+            for value in vertex.get('couplings').values():
+                if isinstance(value, base_objects.FLV_Coupling):
+                    values = list(value.get('flavors').values())
+                else:
+                    values = [value]
+                names.update(v[1:] if v.startswith('-') else v for v in values)
+            if not names:
+                continue
+            if names.issubset(couplings):
+                removed += 1
+            elif names & couplings:
+                modified += 1
+        return removed, modified
+
+    def explain_restriction(self, model_path, default_card, externals, groups,
+                                    categories, set_zero, set_one, identify):
+        """Report what each of the user choices does to the couplings of the
+        model: which ones it drops and which ones it fuses with another.
+
+        For each choice the couplings are evaluated with that choice -and only
+        that one- applied, so a coupling can legitimately have several causes
+        (in the sm 'yb*conjugate(CKM1x3)' is dropped by the 5F scheme as well as
+        by the diagonal CKM). Nothing is removed or changed here: this only
+        reads values, so the report can not alter the resulting model."""
+
+        base = model_reader.ModelReader(
+                        import_ufo.import_model(model_path, restrict=False))
+
+        unrestricted = check_param_card.ParamCard(default_card)
+        self.randomize_param_card(unrestricted, externals)
+        restricted = check_param_card.ParamCard(unrestricted)
+        self.apply_customize_rules(restricted, categories, set_zero, set_one,
+                                                                      identify)
+
+        # what is already zero/fused without any restriction is a property of
+        # the model, not something the user did
+        base_zero, base_fused = self.get_coupling_classes(base, unrestricted)
+        all_zero, all_fused = self.get_coupling_classes(base, restricted)
+        all_zero -= base_zero
+        all_fused -= base_fused
+        base_pdrop, base_pfuse = self.get_parameter_classes(unrestricted, externals)
+
+        # what each choice does on its own
+        alone = []
+        for label, keys in groups:
+            probe = check_param_card.ParamCard(unrestricted)
+            for (lhablock, lhacode) in keys:
+                try:
+                    probe[lhablock].get(list(lhacode)).value = \
+                            restricted[lhablock].get(list(lhacode)).value
+                except (KeyError, IndexError):
+                    continue
+            zero, fused = self.get_coupling_classes(base, probe)
+            pdrop, pfuse = self.get_parameter_classes(probe, externals)
+            alone.append((label, zero - base_zero, fused - base_fused,
+                          (pdrop - base_pdrop) | (pfuse - base_pfuse)))
+
+        explained = set()
+        for label, zero, fused, params in alone:
+            explained |= zero | fused
+        conjunction = (all_zero | all_fused) - explained
+
+        logger.info('Restriction report: your choices drop %d coupling(s) and '
+                    'fuse %d (%d/%d are already so in the unrestricted model)',
+                    len(all_zero), len(all_fused), len(base_zero), len(base_fused))
+        for label, zero, fused, params in alone:
+            if not zero and not fused and not params:
+                logger.info('  %-38s changes nothing', label)
+                continue
+            nb_removed, nb_modified = self.get_interaction_impact(base, zero)
+            logger.info('  %-38s %d coupling(s) dropped, %d fused, %d '
+                        'interaction(s) removed%s', label, len(zero), len(fused),
+                        nb_removed,
+                        ', %d modified' % nb_modified if nb_modified else '')
+            if zero:
+                logger.info('  %-38s   dropped: %s', '', self.short_list(zero))
+            if fused:
+                logger.info('  %-38s   fused:   %s', '', self.short_list(fused))
+            if params:
+                logger.info('  %-38s   %d parameter(s) leave the param_card', '',
+                            len(params))
+            others = set()
+            for label2, zero2, fused2, params2 in alone:
+                if label2 != label:
+                    others |= zero2 | fused2
+            shared = (zero | fused) & others
+            if shared:
+                logger.info('  %-38s   %d coupling(s) are also covered by '
+                            'another of your choices', '', len(shared))
+        if conjunction:
+            logger.info('  %-38s %d coupling(s): %s',
+                        'only through several choices at once:',
+                        len(conjunction), self.short_list(conjunction))
+
+        return alone, (base_zero, base_fused), conjunction
+
+    @staticmethod
+    def short_list(names, nb=8):
+        """a readable -truncated- list of names"""
+
+        names = sorted(names)
+        if len(names) <= nb:
+            return ', '.join(names)
+        return '%s, ... (%d more)' % (', '.join(names[:nb]), len(names) - nb)
+
     def do_customize_model(self, line):
         """create a restriction card in a interactive way"""
 
         args = self.split_arg(line)
         self.check_customize_model(args)
 
-        name = args[0].split('=', 1)[1] if args else None
+        name = ([a.split('=', 1)[1] for a in args if a.startswith('--save=')]
+                                                                      + [None])[0]
+        explain = '--explain' in args
         model_path = self._curr_model.get('modelpath')
         # the model as currently loaded: only used to know which of the generic
         # options are already applied (it defines their default value)
         reference_model = self._curr_model
 
         try:
-            self.customize_model(model_path, reference_model, name)
+            self.customize_model(model_path, reference_model, name, explain)
         except Exception:
             # do not leave the interface with the unrestricted model
             self._curr_model = reference_model
             raise
 
-    def customize_model(self, model_path, reference_model, name):
+    def customize_model(self, model_path, reference_model, name, explain=False):
         """the body of do_customize_model. model_path is the model to
         customize, reference_model the model as currently loaded and name the
         name of the restriction to save (None to only modify the model in
-        memory)."""
+        memory). explain asks for a report of what each choice did remove."""
 
         # (re)import the full model (get rid of the default restriction)
         self._curr_model = import_ufo.import_model(model_path, restrict=False)
@@ -8987,6 +9203,16 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
         model, restrict_card, restricted = self.build_restricted_model(
             model_path, default_card, externals, categories, set_zero, set_one,
             identify)
+
+        if explain:
+            groups = self.get_restriction_groups(categories, set_zero, set_one,
+                                          identify, ask_instance.lha2name)
+            try:
+                self.explain_restriction(model_path, default_card, externals,
+                        groups, categories, set_zero, set_one, identify)
+            except Exception as error:
+                # the report is informative only: never let it break the command
+                logger.warning('Could not build the restriction report: %s', error)
 
         if name:
             # The restriction is driven by the value of the parameters, so a
