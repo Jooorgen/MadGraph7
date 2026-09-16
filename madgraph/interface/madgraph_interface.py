@@ -9171,15 +9171,17 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
             self.log_restriction_group(base, alone[-1])
 
         # the cross-choice information is only available once they all ran
-        explained, shared = set(), set()
+        # how many of the restrictions cover each coupling. Counting (instead
+        # of intersecting every pair) keeps this linear on a card which has
+        # hundreds of restrictions, and does not confuse two groups which
+        # happen to have the same label
+        explained, covered_by = set(), {}
         for label, zero, fused, params in alone:
-            explained |= zero | fused
-        for label, zero, fused, params in alone:
-            others = set()
-            for label2, zero2, fused2, params2 in alone:
-                if label2 != label:
-                    others |= zero2 | fused2
-            shared |= (zero | fused) & others
+            entries = zero | fused
+            explained |= entries
+            for name in entries:
+                covered_by[name] = covered_by.get(name, 0) + 1
+        shared = set(name for name, nb in covered_by.items() if nb > 1)
         conjunction = (all_zero | all_fused) - explained
 
         if shared:
@@ -9331,6 +9333,10 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
             if not isinstance(restrict_file, str):
                 raise self.InvalidCmd('The current model is not restricted by '
                     'a card. Give one (or a model name like sm-ckm) to explain.')
+            if not os.path.isfile(restrict_file):
+                raise self.InvalidCmd('The card the current model was built '
+                    'from (%s) is not on disk anymore. Give the path of a card '
+                    '(or a model name like sm-ckm) to explain.' % restrict_file)
             return model.get('modelpath'), restrict_file
 
         if os.path.isfile(args[0]):
@@ -9470,6 +9476,10 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
                 raise self.InvalidCmd('customize_model can not be applied to this model.')
 
         self._curr_model = model
+        # the card it was just built from was a temporary file which
+        # build_restricted_model has already removed: do not leave the model
+        # pointing at it (explain_restriction would read it)
+        self._curr_model.restrict_card = None
         # restore the default value of everything the user did not restrict
         param_card = self.get_default_param_card(model, default_card, restricted,
                                                  set_equal)
@@ -9482,13 +9492,15 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
         self.process_model()
 
         if name:
-            path = pjoin(model_path, 'restrict_%s.dat' % name)
-            logger.info('Save restriction file as %s' % path)
-            restrict_card.write(path)
-            path = pjoin(model_path, 'param_%s.dat' % name)
-            logger.info('Save default card file as %s' % path)
-            param_card.write(path)
+            restrict_path = pjoin(model_path, 'restrict_%s.dat' % name)
+            logger.info('Save restriction file as %s' % restrict_path)
+            restrict_card.write(restrict_path)
+            param_path = pjoin(model_path, 'param_%s.dat' % name)
+            logger.info('Save default card file as %s' % param_path)
+            param_card.write(param_path)
             self._curr_model['name'] += '-%s' % name
+            # that one does exist, so 'explain_restriction' can read it back
+            self._curr_model.restrict_card = restrict_path
 
     @staticmethod
     def warn_rules_lost_by_formula(categories, lost):
@@ -12996,7 +13008,11 @@ class AskforCustomize(cmd.SmartQuestion):
 
         if not selected:
             if not self.display_internal(pattern):
-                logger.info('No parameter of this model matches \'%s\'.', args[0])
+                if args:
+                    logger.info('No parameter of this model matches \'%s\'.',
+                                args[0])
+                else:
+                    logger.info('This model has no external parameter.')
             return
 
         nb = sum(len(params) for params in selected.values())
@@ -13115,7 +13131,10 @@ class AskforCustomize(cmd.SmartQuestion):
             matching = [coupling for coupling in self.ufo_couplings.values()
                         if pattern is None or pattern in coupling.name.lower()]
         if not matching:
-            logger.info('No coupling of this model matches \'%s\'.', args[0])
+            if args:
+                logger.info('No coupling of this model matches \'%s\'.', args[0])
+            else:
+                logger.info('This model has no coupling.')
             return
         if pattern is None and len(matching) > 300:
             logger.info('This model has %d couplings. Give a name -or a part '

@@ -16,6 +16,7 @@
 
 from __future__ import absolute_import
 import io
+import os
 
 import tests.unit_tests as unittest
 
@@ -1102,3 +1103,45 @@ class TestExpandExpression(unittest.TestCase):
         # all: the exact match is the one which is expanded
         self.ask.do_display('couplings GC_1')
         self.ask.do_display('parameters MB')
+
+
+#===============================================================================
+# explain_restriction picks the right card
+#===============================================================================
+class TestRestrictionToExplain(unittest.TestCase):
+    """Which (model, card) pair 'explain_restriction ARG' resolves to"""
+
+    def setUp(self):
+        self.cmd = mg_interface.MadGraphCmd()
+
+    def test_a_model_name(self):
+        model_path, card = self.cmd.get_restriction_to_explain(['sm-ckm'])
+        self.assertEqual(os.path.basename(model_path), 'sm')
+        self.assertEqual(os.path.basename(card), 'restrict_ckm.dat')
+
+    def test_an_unknown_name(self):
+        self.assertRaises(mg_interface.MadGraph5Error,
+                          self.cmd.get_restriction_to_explain, ['NotAModel'])
+
+    def test_no_model_loaded(self):
+        self.assertRaises(mg_interface.MadGraph5Error,
+                          self.cmd.get_restriction_to_explain, [])
+
+    def test_a_card_which_is_not_on_disk_anymore(self):
+        """customize_model builds the model from a temporary card which it then
+        removes: the command must say so instead of failing on the open()"""
+
+        class FakeModel(dict):
+            restrict_card = '/does/not/exist/restrict_gone.dat'
+            def get(self, name):
+                return self[name]
+        self.cmd._curr_model = FakeModel({'modelpath': 'whatever'})
+        self.assertRaises(mg_interface.MadGraph5Error,
+                          self.cmd.get_restriction_to_explain, [])
+
+    def test_the_card_of_the_current_model(self):
+        sm_path = import_ufo.find_ufo_path('sm')
+        self.cmd._curr_model = import_ufo.import_model(sm_path)
+        model_path, card = self.cmd.get_restriction_to_explain([])
+        self.assertEqual(os.path.basename(card), 'restrict_default.dat')
+        self.assertTrue(os.path.isfile(card))
