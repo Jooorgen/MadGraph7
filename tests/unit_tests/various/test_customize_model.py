@@ -1145,3 +1145,86 @@ class TestRestrictionToExplain(unittest.TestCase):
         model_path, card = self.cmd.get_restriction_to_explain([])
         self.assertEqual(os.path.basename(card), 'restrict_default.dat')
         self.assertTrue(os.path.isfile(card))
+
+
+#===============================================================================
+# --all: every coupling instead of the first few
+#===============================================================================
+class TestFullListing(unittest.TestCase):
+    """The lists of couplings of a report are truncated unless --all is given"""
+
+    def setUp(self):
+        self.cmd = mg_interface.MadGraphCmd()
+        self.names = ['GC_%d' % i for i in [13, 9, 101, 2, 47, 8, 300, 5,
+                                            22, 1, 76, 4]]
+
+    def test_natural_order(self):
+        """GC_9 before GC_10, not after GC_101"""
+
+        self.assertEqual(mg_interface.natural_key('GC_9') <
+                         mg_interface.natural_key('GC_10'), True)
+        self.assertEqual(self.cmd.short_list(['GC_10', 'GC_9'], None),
+                         'GC_9, GC_10')
+
+    def test_truncated_by_default(self):
+        out = self.cmd.short_list(self.names)
+        self.assertTrue(out.endswith('... (4 more)'))
+        self.assertEqual(out.count('GC_'), 8)
+
+    def test_all_of_them(self):
+        out = self.cmd.short_list(self.names, None)
+        self.assertFalse('more)' in out)
+        self.assertEqual(out.count('GC_'), len(self.names))
+        # and in natural order
+        self.assertTrue(out.startswith('GC_1, GC_2, GC_4, GC_5, GC_8, GC_9'))
+
+    def test_wrap(self):
+        """a long list is cut into lines, keeping every name"""
+
+        lines = self.cmd.wrap_list(self.names, width=30)
+        self.assertTrue(len(lines) > 1)
+        for line in lines:
+            self.assertTrue(len(line) <= 32, line)
+        self.assertEqual(sorted(', '.join(lines).split(', ')),
+                         sorted(self.names))
+
+    def test_wrap_of_nothing(self):
+        self.assertEqual(self.cmd.wrap_list([]), [''])
+
+    def test_the_flag_is_accepted(self):
+        for args in [['--all', 'sm-ckm'], ['sm-ckm', '--all']]:
+            self.cmd.check_explain_restriction(list(args))
+        # '--all' is not a target: alone it still needs a model to explain
+        self.assertRaises(mg_interface.MadGraph5Error,
+                    self.cmd.check_explain_restriction, ['--all'])
+        # and two targets are still refused
+        self.assertRaises(mg_interface.MadGraph5Error,
+                    self.cmd.check_explain_restriction, ['sm-ckm', 'sm', '--all'])
+
+    def test_completion_shares_the_prefix(self):
+        """the readline wrapper strips the common prefix off every candidate,
+        so one which does not start with the typed text comes back mangled"""
+
+        self.cmd._curr_model = import_ufo.import_model(
+                                            import_ufo.find_ufo_path('sm'))
+        for text, begidx in [('loop_sm-', 19), ('loop_', 20), ('', 20),
+                             ('restrict_c', 20), ('--', 20)]:
+            line = 'explain_restriction %s' % text
+            out = self.cmd.complete_explain_restriction(text, line, begidx,
+                                                        len(line))
+            for name in out:
+                self.assertTrue(name.startswith(text),
+                                '%r proposed for %r' % (name, text))
+        # the option is proposed, and a model restriction is found
+        self.assertTrue('--all' in
+                self.cmd.complete_explain_restriction('--', 'explain_restriction --',
+                                                      20, 22))
+        self.assertTrue('loop_sm-ckm' in
+                self.cmd.complete_explain_restriction('loop_sm-',
+                        'explain_restriction loop_sm-', 19, 28))
+
+    def test_customize_model_accepts_it_too(self):
+        """it is the same report, so it takes the same flag"""
+
+        self.cmd.check_customize_model(['--explain=final', '--all'])
+        self.cmd.check_customize_model(['--all'])

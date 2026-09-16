@@ -5,77 +5,11 @@ ANNOUNCEMENT:
    A new LTS (based on the current 3.5.X) is starting now and will act as the stable release for the coming years.
 
 3.8.0 (XX/XX/XX):
-   OM: 'customize_model' is now available for every UFO model (it used to require the
-       model to ship a build_restrict.py file). On top of the options defined by the
-       model, the following ones are now always proposed:
-        - the flavour scheme of the quarks (3F/4F/5F),
-        - the number of massive leptons (0 to 3, from the heaviest one),
-          Both are always proposed, but only with the values the model can
-          actually take: a UFO where the c quark has no mass parameter is
-          offered 4F and 5F only, and is told why 3F is missing.
-        - a diagonal CKM, for the models which follow one of the conventions of
-          the SM for the quark mixing: the Wolfenstein parameterisation, the
-          matrix itself (VCKM of SLHA2, CKMBLOCK, ...) or a single Cabibbo
-          angle. It used to be available for the sm only, through its
-          build_restrict.py,
-        - 'set_zero NAME'/'set_one NAME' to fix an external parameter to zero/one,
-        - 'set_equal NAME1 NAME2' to force a parameter to the value of another one,
-          The 'set' command is a shortcut for the three of them when its first
-          argument is a parameter: 'set yt 0', 'set yt 1', 'set yt = yb'.
-        - 'formula NAME = EXPR' to turn an external parameter into an internal one
-          and 'coupling NAME = EXPR' to change the definition of a coupling. Since
-          those two can not be stored in a restriction card, they write a new UFO
-          model on disk (the name of the model is asked) as 'add model' does. They
-          are therefore not compatible with the --save option.
-       The restriction card written by --save is now built from the default
-       param_card where only the values which would be simplified by accident (0, 1
-       or duplicated values) are randomized, and the restriction is applied twice
-       with different random values to check that the same model is obtained (the
-       customization is refused with a warning otherwise). A param_NAME.dat holding
-       the default value of all the non-restricted parameters is now written next to
-       restrict_NAME.dat, and the model kept in memory uses those default values.
-       'customize_model --explain=final' reports what each of your choices does to
-       the model: how many couplings it drops, how many it fuses with another one,
-       how many interactions go away and how many parameters leave the
-       param_card, plus the couplings that several of your choices would remove
-       independently. The attribution is done by evaluating the couplings once
-       per choice with that choice -and only that one- applied, so it reads
-       values only and can not change the resulting model. Each choice is
-       reported as soon as it is evaluated, since on a large model every one of
-       them is a full evaluation of the couplings.
-       'customize_model --explain=life' (or just --explain) instead follows each
-       command entered at the question with what that command changed (couplings
-       dropped/fused, parameters restricted), so the effect of a choice is seen
-       while the model is being customized rather than only at the end. Both
-       reports are framed by a banner and coloured, so that they stand out of
-       the log of the model imports they sit in the middle of.
-   OM: Importing a restricted model now suggests 'explain_restriction' instead of
-       telling to set the stdout_level to DEBUG so that the details of the import
-       are written into a log file.
-   OM: models/loop_sm/restrict_test.dat is removed: nothing in the code or the
-       tests refers to 'loop_sm-test' (the parallel tests use the separate
-       restrict_parallel_test.dat, which stays).
-   OM: New command 'explain_restriction [PATH|MODEL-RESTRICTION]' which applies
-       that same report to a restriction card which already exists (the one the
-       current model was loaded with by default, otherwise the path of a card or
-       a name such as 'sm-ckm'). Every parameter the card sets to zero/one, and
-       every family of parameters it sets to a common value, is applied alone to
-       say which couplings it -and it only- is responsible for.
-   OM: 'display parameters [X]' and 'display couplings [X]' are now available at
-       the customize_model question: the first lists the parameters of the
-       param_card by block, with the value of the model and what the choices made
-       so far do to each of them, the second the couplings with their expression.
-       Both accept a block name or a part of a name to filter on, and looking up
-       an internal parameter shows its formula (which is why it can not be
-       restricted). When the argument selects a few couplings/parameters, every
-       parameter of their definition is unfolded recursively down to the entries
-       of the param_card, the restricted ones are highlighted, and a last line
-       names the ones the expression depends on: that is the answer to 'why is
-       that coupling dropped?'. An exact name wins over a substring, so
-       'display couplings GC_1' is about GC_1 and not about GC_1, GC_10, ...
-       Fix as well 'customize_model' being unusable from a script (the answer to the
-       question was not returned to the command) and the resulting model not being
-       flavour-grouped/multiparticle-refreshed as 'import model NAME-restriction' is.
+   OM: 'customize_model' now works for every UFO model: generic options (flavour
+       scheme 3F/4F/5F, number of massive leptons, diagonal CKM), commands to set a
+       parameter to zero/one/to another one or to change a formula (writing a new UFO),
+       --explain to report what each choice removes, and --save also writes param_NAME.dat.
+   OM: New command 'explain_restriction': report what a restriction card removes.
    OM: Bug fix custom files for cuts/scale/... were broken for NLO computation since 3.6.0
 
 3.7.3 (01/09/26):

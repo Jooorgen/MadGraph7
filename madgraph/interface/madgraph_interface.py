@@ -543,6 +543,7 @@ class HelpToCmd(cmd.HelpCmd):
         logger.info("    Every parameter the card sets to zero/one, and every family of")
         logger.info("    parameters it sets to a common value, is applied alone to say")
         logger.info("    which couplings it -and it only- is responsible for.")
+        logger.info("    --all lists every coupling instead of the first few of them.")
 
     def help_customize_model(self):
         logger.info("syntax: customize_model --save=NAME",'$MG:color:BLUE')
@@ -557,6 +558,7 @@ class HelpToCmd(cmd.HelpCmd):
         logger.info("    --explain=life (or --explain) reports what each command you")
         logger.info("    enter changes in the model, --explain=final reports which of your")
         logger.info("    choices is responsible for each coupling removed from it.")
+        logger.info("    --all lists every coupling instead of the first few of them.")
 
     def help_output(self):
         logger.info("syntax: output [" + "|".join(self._export_formats) + \
@@ -1038,6 +1040,13 @@ class HelpToCmd(cmd.HelpCmd):
 # 'final' reports which choice is responsible for what once it is closed.
 CUSTOMIZE_EXPLAIN_MODES = ['life', 'final']
 CUSTOMIZE_EXPLAIN_ALIAS = {'live': 'life'} # 'live' is the spelling one expects
+
+
+def natural_key(name):
+    """sort GC_9 before GC_10"""
+
+    return [int(part) if part.isdigit() else part
+            for part in re.split(r'(\d+)', str(name))]
 
 
 def parse_explain_mode(arg):
@@ -1705,6 +1714,7 @@ This will take effect only in a NEW terminal
     def check_explain_restriction(self, args):
         """check the validity of the line"""
 
+        args = [arg for arg in args if arg != '--all']
         if len(args) > 1:
             self.help_explain_restriction()
             raise self.InvalidCmd('explain_restriction takes at most one argument')
@@ -1719,6 +1729,8 @@ This will take effect only in a NEW terminal
 
         # Check argument validity
         for arg in args:
+            if arg == '--all':
+                continue
             if arg == '--explain' or arg.startswith('--explain='):
                 mode = parse_explain_mode(arg)
                 if mode not in CUSTOMIZE_EXPLAIN_MODES:
@@ -2528,25 +2540,35 @@ class CompleteForCmd(cmd.CompleteCmd):
             return self.deal_multiple_categories(completion_categories, formatting) 
             
     def complete_explain_restriction(self, text, line, begidx, endidx):
-        "Complete the explain_restriction command"
+        """Complete the explain_restriction command: a restriction card of the
+        current model, or a MODEL-RESTRICTION name.
 
-        args = self.split_arg(line[0:begidx])
-        if len(args) != 1:
-            return
-        out = {'restriction cards': []}
-        if self._curr_model:
-            model_path = self._curr_model.get('modelpath')
-            out['restriction cards'] = [name
-                        for name in os.listdir(model_path)
+        Every candidate must start with text: when the word being completed
+        contains a '-', the readline wrapper strips that common prefix off each
+        of them, so one which does not share it comes back mangled (a
+        'loop_qcd_qed_sm' proposed for 'loop_sm-' would show up as '_qed_sm')."""
+
+        args = [arg for arg in self.split_arg(line[0:begidx]) if arg != '--all']
+        if len(args) > 1:
+            return self.list_completion(text, ['--all'], line)
+
+        if '-' in text and not text.startswith('-'):
+            # the restrictions of a given model ('--all' also has a '-')
+            model = text.rsplit('-', 1)[0]
+            out = self.find_restrict_card(model, no_restrict=False)
+            out += self.find_restrict_card(model, no_restrict=False,
+                                           base_dir=pjoin(MG5DIR, 'models'))
+        else:
+            out = ['--all']
+            if self._curr_model:
+                model_path = self._curr_model.get('modelpath')
+                out += [name for name in os.listdir(model_path)
                         if name.startswith('restrict_') and name.endswith('.dat')]
-        completion = self.complete_import(text, 'import model ' + text, 13,
-                                          13 + len(text), allow_restrict=True,
-                                          formatting=False)
-        if isinstance(completion, dict):
-            out.update(completion)
-        elif completion:
-            out['model name'] = completion
-        return self.deal_multiple_categories(out)
+            model_dir = pjoin(MG5DIR, 'models')
+            out += [name for name in os.listdir(model_dir)
+                    if os.path.exists(pjoin(model_dir, name, 'couplings.py'))]
+
+        return self.list_completion(text, misc.make_unique(out), line)
 
     def complete_customize_model(self, text, line, begidx, endidx):
         "Complete the customize_model command"
@@ -2555,7 +2577,7 @@ class CompleteForCmd(cmd.CompleteCmd):
 
         # Format
         return self.list_completion(text, ['--save=', '--explain',
-                    '--explain=life', '--explain=final'])
+                    '--explain=life', '--explain=final', '--all'])
 
 
     def complete_check(self, text, line, begidx, endidx, formatting=True):
@@ -9122,7 +9144,7 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
         return removed, modified
 
     def explain_restriction(self, model_path, externals, groups, unrestricted,
-                                                        restricted, base=None):
+                                    restricted, base=None, full=False):
         """Report what each of the user choices does to the couplings of the
         model: which ones it drops and which ones it fuses with another.
 
@@ -9168,7 +9190,7 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
             pdrop, pfuse = self.get_parameter_classes(probe, externals)
             alone.append((label, zero - base_zero, fused - base_fused,
                           (pdrop - base_pdrop) | (pfuse - base_pfuse)))
-            self.log_restriction_group(base, alone[-1])
+            self.log_restriction_group(base, alone[-1], full)
 
         # the cross-choice information is only available once they all ran
         # how many of the restrictions cover each coupling. Counting (instead
@@ -9184,14 +9206,15 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
         shared = set(name for name, nb in covered_by.items() if nb > 1)
         conjunction = (all_zero | all_fused) - explained
 
+        nb = None if full else 8
         if shared:
             logger.info('  %d coupling(s) are covered by more than one '
                         'restriction: %s' % (len(shared),
-                        self.short_list(shared)), '$MG:color:BLUE')
+                        self.short_list(shared, nb)), '$MG:color:BLUE')
         if conjunction:
             logger.info('  %d coupling(s) only through several of them at once:'
                         ' %s' % (len(conjunction),
-                        self.short_list(conjunction)), '$MG:color:BLUE')
+                        self.short_list(conjunction, nb)), '$MG:color:BLUE')
         self.log_report_banner()
 
         return alone, (base_zero, base_fused), conjunction
@@ -9209,7 +9232,7 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
             logger.info(' %s' % text, '$MG:color:GREEN')
             logger.info('=' * cls.REPORT_WIDTH, '$MG:color:GREEN')
 
-    def log_restriction_group(self, model, entry):
+    def log_restriction_group(self, model, entry, full=False):
         """the part of the --explain report which concerns a single choice"""
 
         label, zero, fused, params = entry
@@ -9222,22 +9245,50 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
                     nb_removed,
                     ', %d modified' % nb_modified if nb_modified else ''),
                     '$MG:BOLD')
+        indent = '  %-38s   ' % ''
         if zero:
-            logger.info('  %-38s   dropped: %s', '', self.short_list(zero))
+            self.log_names(indent, 'dropped:', zero, full)
         if fused:
-            logger.info('  %-38s   fused:   %s', '', self.short_list(fused))
+            self.log_names(indent, 'fused:  ', fused, full)
         if params:
             logger.info('  %-38s   %d parameter(s) restricted (set to 0/1 '
                         'or merged)', '', len(params))
 
     @staticmethod
     def short_list(names, nb=8):
-        """a readable -truncated- list of names"""
+        """a readable list of names, truncated after nb of them (nb=None to
+        keep them all)"""
 
-        names = sorted(names)
-        if len(names) <= nb:
+        names = sorted(names, key=natural_key)
+        if nb is None or len(names) <= nb:
             return ', '.join(names)
         return '%s, ... (%d more)' % (', '.join(names[:nb]), len(names) - nb)
+
+    @staticmethod
+    def wrap_list(names, width=64):
+        """the names, cut into lines of at most width characters"""
+
+        lines, current, length = [], [], 0
+        for name in sorted(names, key=natural_key):
+            if current and length + len(name) + 2 > width:
+                lines.append(', '.join(current))
+                current, length = [], 0
+            current.append(name)
+            length += len(name) + 2
+        if current:
+            lines.append(', '.join(current))
+        return lines or ['']
+
+    def log_names(self, indent, title, names, full):
+        """'title: a, b, c', on several lines when they are all wanted"""
+
+        if not full:
+            logger.info('%s%s %s', indent, title, self.short_list(names))
+            return
+        lines = self.wrap_list(names)
+        logger.info('%s%s %s', indent, title, lines[0])
+        for line in lines[1:]:
+            logger.info('%s%s %s', indent, ' ' * len(title), line)
 
     @staticmethod
     def get_lha2name(model_path):
@@ -9296,6 +9347,8 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
 
         args = self.split_arg(line)
         self.check_explain_restriction(args)
+        full = '--all' in args
+        args = [arg for arg in args if arg != '--all']
 
         model_path, restrict_file = self.get_restriction_to_explain(args)
         logger.info('Explaining %s on the model %s', os.path.basename(restrict_file),
@@ -9320,7 +9373,7 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
         self.randomize_param_card(unrestricted, externals)
 
         self.explain_restriction(model_path, externals, groups, unrestricted,
-                                 restricted)
+                                 restricted, full=full)
 
     def get_restriction_to_explain(self, args):
         """(model path, restriction card) of an 'explain_restriction' argument:
@@ -9367,19 +9420,22 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
         # the last --explain given wins, None if there is none
         explain = ([None] + [parse_explain_mode(a) for a in args
                              if parse_explain_mode(a)])[-1]
+        full = '--all' in args
         model_path = self._curr_model.get('modelpath')
         # the model as currently loaded: only used to know which of the generic
         # options are already applied (it defines their default value)
         reference_model = self._curr_model
 
         try:
-            self.customize_model(model_path, reference_model, name, explain)
+            self.customize_model(model_path, reference_model, name, explain,
+                                 full)
         except Exception:
             # do not leave the interface with the unrestricted model
             self._curr_model = reference_model
             raise
 
-    def customize_model(self, model_path, reference_model, name, explain=None):
+    def customize_model(self, model_path, reference_model, name, explain=None,
+                                                                   full=False):
         """the body of do_customize_model. model_path is the model to
         customize, reference_model the model as currently loaded and name the
         name of the restriction to save (None to only modify the model in
@@ -9443,7 +9499,7 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
                                                         set_one, set_equal)
                 self.explain_restriction(model_path, externals, groups,
                         unrestricted, restricted,
-                        base=explainer.model if explainer else None)
+                        base=explainer.model if explainer else None, full=full)
             except Exception as error:
                 # the report is informative only: never let it break the command
                 logger.warning('Could not build the restriction report: %s', error)

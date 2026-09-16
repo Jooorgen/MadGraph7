@@ -536,6 +536,12 @@ class OriginalCmd(object):
 class BasicCmd(OriginalCmd):
     """Simple extension for the readline"""
 
+    # set by complete() and read back by print_suggestions, which readline
+    # calls on the object owning the completer. A question which is answered
+    # before any completion ever ran has never been through complete(), so the
+    # hook used to die with 'object has no attribute completion_matches'.
+    completion_matches = []
+
     def set_readline_completion_display_matches_hook(self):
         """ This has been refactorized here so that it can be called when another
         program called by MG5 (such as MadAnalysis5) changes this attribute of readline"""
