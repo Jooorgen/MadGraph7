@@ -184,13 +184,25 @@ class TestCustomizeCard(unittest.TestCase):
                         self.assertNotEqual(new, old)
                         self.assertTrue(0 < new < 1)
 
-        # no value of the card can be simplified by the restriction anymore
-        values = [param.value for block in self.card
-                  for param in self.card[block]
-                  if (block, tuple(param.lhacode)) in self.externals
-                  and not (block == 'decay' and param.value == 0.)]
-        self.assertEqual(len(values), len(set(values)))
-        self.assertFalse([v for v in values if v in (0., 1.)])
+        # no value of a block can be simplified by the restriction anymore.
+        # Only inside a block: that is where the restriction merges parameters,
+        # so MASS 15 and YUKAWA 15 may well keep the same value.
+        for block in self.card:
+            if block == 'loop' or block.startswith(('qnumbers', 'decay_table')):
+                continue
+            values = [param.value for param in self.card[block]
+                      if (block, tuple(param.lhacode)) in self.externals
+                      and not (block == 'decay' and param.value == 0.)]
+            self.assertEqual(len(values), len(set(values)), block)
+            self.assertFalse([v for v in values if v in (0., 1.)], block)
+
+    def test_a_value_shared_between_two_blocks_is_kept(self):
+        """MTA and ymtau are both 1.777 in the sm and stay so: the restriction
+        never merges two parameters of two different blocks"""
+
+        self.cmd.randomize_param_card(self.card, self.externals)
+        self.assertEqual(self.card['mass'].get([15]).value,
+                         self.card['yukawa'].get([15]).value)
 
     def test_randomize_keeps_the_order_of_magnitude(self):
         """MZ must not be replaced by a O(1) value because of a duplicate"""
@@ -519,8 +531,8 @@ class TestRestrictionGroups(unittest.TestCase):
         groups = self.cmd.get_restriction_groups([self.category],
                     set_zero=[('YUKAWA', (6,))], set_one=[],
                     set_equal=[(('MASS', (5,)), ('MASS', (6,)))],
-                    lha2name={('YUKAWA', (6,)): 'ymt', ('MASS', (5,)): 'MB',
-                              ('MASS', (6,)): 'MT'})
+                    lha2name={('yukawa', (6,)): 'ymt', ('mass', (5,)): 'MB',
+                              ('mass', (6,)): 'MT'})
         labels = [label for label, keys in groups]
         # an option which is not selected has no rule, so it is not a group
         self.assertEqual(labels, ['massless b', 'scheme = a', 'set_zero ymt',
@@ -911,3 +923,116 @@ class TestCKMRules(unittest.TestCase):
         rules = [('Wolfenstein', [1], 0.0)]
         self.assertEqual(build_restrict_lib.is_already_applied(
                                     ParamModel([]), rules), True)
+
+
+#===============================================================================
+# explaining a restriction card which already exists
+#===============================================================================
+class TestCardRestrictionGroups(unittest.TestCase):
+    """What explain_restriction attributes a removal to, when it is fed a card
+    instead of the answers to the question."""
+
+    def setUp(self):
+        self.cmd = mg_interface.MadGraphCmd()
+        self.card = check_param_card.ParamCard("""
+Block mass
+    4 0.0 # mc
+    5 2.0 # mb
+    6 2.0 # mt
+   23 1.0 # mz
+Block yukawa
+    5 2.0 # ymb
+DECAY 6 0.0 # wt
+""".split('\n'))
+        self.externals = set([('mass', (4,)), ('mass', (5,)), ('mass', (6,)),
+                              ('mass', (23,)), ('yukawa', (5,)), ('decay', (6,))])
+        self.lha2name = {('mass', (4,)): 'MC', ('mass', (5,)): 'MB',
+                         ('mass', (6,)): 'MT', ('mass', (23,)): 'MZ',
+                         ('yukawa', (5,)): 'ymb', ('decay', (6,)): 'WT'}
+
+    def test_groups(self):
+        groups = self.cmd.get_card_restriction_groups(self.card, self.externals,
+                                                      self.lha2name)
+        labels = [label for label, keys in groups]
+        # the parameters it sets to zero or one, one group each
+        self.assertTrue('MC = 0' in labels)
+        self.assertTrue('MZ = 1' in labels)
+        self.assertTrue('WT = 0' in labels)
+        # and the family which shares a value, as a single group
+        self.assertTrue('MB = MT' in labels)
+        # ymb has the same value but in another block: not the same family
+        self.assertFalse([l for l in labels if 'ymb' in l])
+        self.assertEqual(dict(groups)['MB = MT'],
+                         set([('mass', (5,)), ('mass', (6,))]))
+
+    def test_a_card_without_restriction(self):
+        card = check_param_card.ParamCard("""
+Block mass
+    5 2.0 # mb
+    6 3.0 # mt
+""".split('\n'))
+        self.assertEqual(self.cmd.get_card_restriction_groups(card,
+                    set([('mass', (5,)), ('mass', (6,))]), self.lha2name), [])
+
+    def test_only_the_external_parameters(self):
+        self.assertEqual(self.cmd.get_card_restriction_groups(self.card, set(),
+                                                    self.lha2name), [])
+
+    def test_name_lookup_is_case_insensitive(self):
+        """a UFO spells its blocks as it likes ('Wolfenstein' in the sm)"""
+
+        lha2name = {('wolfenstein', (1,)): 'lamWS'}
+        self.assertEqual(mg_interface.MadGraphCmd.name_of_lha(
+                                        lha2name, ('Wolfenstein', (1,))), 'lamWS')
+        self.assertEqual(mg_interface.MadGraphCmd.name_of_lha(
+                                        lha2name, ('WOLFENSTEIN', (1,))), 'lamWS')
+        # and an unknown one still says which entry it is
+        self.assertEqual(mg_interface.MadGraphCmd.name_of_lha(
+                                    lha2name, ('MASS', (5,))), 'MASS [5]')
+
+
+class TestDisplayInTheQuestion(unittest.TestCase):
+    """'display parameters/couplings' while answering the question"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.full_model = import_ufo.import_full_model(
+                                            import_ufo.find_ufo_path('sm'))
+
+    def setUp(self):
+        self.cmd = mg_interface.MadGraphCmd()
+        self.cmd._curr_model = self.full_model
+        self.ask = mg_interface.AskforCustomize('', mother_interface=self.cmd,
+            categories=self.cmd.get_customize_categories(self.full_model,
+                                                         self.full_model))
+
+    def test_current_restrictions(self):
+        """the display marks what the choices made so far do to a parameter"""
+
+        self.ask.do_set_zero('ymt')
+        self.ask.do_set_equal('MB MT')
+        self.ask.do_set('flavourscheme 5F')
+        current = self.ask.get_current_restrictions()
+        self.assertEqual(current[('yukawa', (6,))], '0')
+        # the commands win over the options, as they do on the card
+        self.assertEqual(current[('mass', (5,))], 'MT')
+        # and the options of the question are in there too
+        self.assertTrue(('yukawa', (4,)) in current) # 5F: c is massless
+
+    def test_display_does_not_crash(self):
+        """the command is a read-only view: whatever the argument"""
+
+        for line in ['parameters', 'parameters yukawa', 'parameters mb',
+                     'parameters NotAParameter', 'couplings GC_1',
+                     'couplings NotACoupling', 'parameters yt']:
+            self.ask.do_display(line)
+        # an invalid sub-command is refused, not raised
+        self.ask.do_display('')
+        self.ask.do_display('something')
+
+    def test_completion(self):
+        out = self.ask.complete_display('', 'display ', 8, 8)
+        self.assertEqual(sorted(out), ['couplings', 'parameters'])
+        out = self.ask.complete_display('', 'display parameters ', 19, 19)
+        self.assertTrue('YUKAWA' in out)
+        self.assertTrue('MB' in out)

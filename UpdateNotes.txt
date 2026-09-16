@@ -46,7 +46,22 @@ ANNOUNCEMENT:
        'customize_model --explain=life' (or just --explain) instead follows each
        command entered at the question with what that command changed (couplings
        dropped/fused, parameters restricted), so the effect of a choice is seen
-       while the model is being customized rather than only at the end.
+       while the model is being customized rather than only at the end. Both
+       reports are framed by a banner and coloured, so that they stand out of
+       the log of the model imports they sit in the middle of.
+   OM: New command 'explain_restriction [PATH|MODEL-RESTRICTION]' which applies
+       that same report to a restriction card which already exists (the one the
+       current model was loaded with by default, otherwise the path of a card or
+       a name such as 'sm-ckm'). Every parameter the card sets to zero/one, and
+       every family of parameters it sets to a common value, is applied alone to
+       say which couplings it -and it only- is responsible for.
+   OM: 'display parameters [X]' and 'display couplings [X]' are now available at
+       the customize_model question: the first lists the parameters of the
+       param_card by block, with the value of the model and what the choices made
+       so far do to each of them, the second the couplings with their expression.
+       Both accept a block name or a part of a name to filter on, and looking up
+       an internal parameter shows its formula (which is why it can not be
+       restricted).
        Fix as well 'customize_model' being unusable from a script (the answer to the
        question was not returned to the command) and the resulting model not being
        flavour-grouped/multiparticle-refreshed as 'import model NAME-restriction' is.

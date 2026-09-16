@@ -535,6 +535,15 @@ class HelpToCmd(cmd.HelpCmd):
         logger.info('   The program used to open those files can be chosen in the')
         logger.info('   configuration file ./input/mg7_configuration.txt')
 
+    def help_explain_restriction(self):
+        logger.info("syntax: explain_restriction [PATH|MODEL-RESTRICTION]",'$MG:color:BLUE')
+        logger.info("--  Report what a restriction card removes from a model.",'$MG:BOLD')
+        logger.info("    Without argument the card the current model was loaded with,")
+        logger.info("    otherwise the path of a card or a name such as 'sm-ckm'.")
+        logger.info("    Every parameter the card sets to zero/one, and every family of")
+        logger.info("    parameters it sets to a common value, is applied alone to say")
+        logger.info("    which couplings it -and it only- is responsible for.")
+
     def help_customize_model(self):
         logger.info("syntax: customize_model --save=NAME",'$MG:color:BLUE')
         logger.info("--  Open an invite where you options to tweak the model.",'$MG:BOLD')
@@ -1693,6 +1702,18 @@ This will take effect only in a NEW terminal
             self.help_load()
             raise self.InvalidCmd('wrong \"load\" format')
 
+    def check_explain_restriction(self, args):
+        """check the validity of the line"""
+
+        if len(args) > 1:
+            self.help_explain_restriction()
+            raise self.InvalidCmd('explain_restriction takes at most one argument')
+        if not args and not self._curr_model:
+            raise self.InvalidCmd('No model loaded: give a restriction card or '
+                                  'a model name to explain.')
+        if self._model_v4_path:
+            raise self.InvalidCmd('Restriction of Model is not supported by v4 model.')
+
     def check_customize_model(self, args):
         """check the validity of the line"""
 
@@ -2506,6 +2527,27 @@ class CompleteForCmd(cmd.CompleteCmd):
             completion_categories['options'] = self.list_completion(text,['--modelname=','--recreate'])
             return self.deal_multiple_categories(completion_categories, formatting) 
             
+    def complete_explain_restriction(self, text, line, begidx, endidx):
+        "Complete the explain_restriction command"
+
+        args = self.split_arg(line[0:begidx])
+        if len(args) != 1:
+            return
+        out = {'restriction cards': []}
+        if self._curr_model:
+            model_path = self._curr_model.get('modelpath')
+            out['restriction cards'] = [name
+                        for name in os.listdir(model_path)
+                        if name.startswith('restrict_') and name.endswith('.dat')]
+        completion = self.complete_import(text, 'import model ' + text, 13,
+                                          13 + len(text), allow_restrict=True,
+                                          formatting=False)
+        if isinstance(completion, dict):
+            out.update(completion)
+        elif completion:
+            out['model name'] = completion
+        return self.deal_multiple_categories(out)
+
     def complete_customize_model(self, text, line, begidx, endidx):
         "Complete the customize_model command"
 
@@ -8777,12 +8819,13 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
         externals restricts this to the parameters which are really read from
         the card (a param_card also contains informative entries)."""
 
-        used = set()
+        used = {} # per block: two parameters are only merged inside a block
         for block in param_card:
             if block.startswith(('qnumbers', 'decay_table')) or 'info' in block:
                 continue
             if block.lower() == 'loop':
                 continue
+            used.setdefault(block.lower(), set())
             for param in param_card[block]:
                 if (block.lower(), tuple(param.lhacode)) not in externals:
                     continue
@@ -8792,17 +8835,18 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
                     continue # 'auto' width and co.
                 if value == 0. and block.lower() == 'decay':
                     continue
-                if value in (0., 1.) or abs(value) in used:
+                seen = used[block.lower()]
+                if value in (0., 1.) or abs(value) in seen:
                     while True:
                         if value in (0., 1.):
                             new_value = random.random()
                         else:
                             new_value = value * (1 + random.random())
-                        if new_value not in (0., 1.) and abs(new_value) not in used:
+                        if new_value not in (0., 1.) and abs(new_value) not in seen:
                             break
                     value = new_value
                     param.value = value
-                used.add(abs(value))
+                seen.add(abs(value))
 
     @staticmethod
     def resolve_set_equal(set_equal):
@@ -8967,12 +9011,8 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
         """the user choices, as (label, set of (lhablock, lhacode)) pairs. Those
         are the units the removal of a coupling is attributed to."""
 
-        # lha2name is keyed with the block as the UFO spells it
-        by_lha = dict(((key[0].lower(), key[1]), value)
-                      for key, value in lha2name.items())
-
         def name(key):
-            return by_lha.get(key, '%s %s' % (key[0], list(key[1])))
+            return self.name_of_lha(lha2name, key)
 
         groups = []
         for category in categories:
@@ -9081,8 +9121,8 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
                 modified += 1
         return removed, modified
 
-    def explain_restriction(self, model_path, default_card, externals, groups,
-                            categories, set_zero, set_one, set_equal, base=None):
+    def explain_restriction(self, model_path, externals, groups, unrestricted,
+                                                        restricted, base=None):
         """Report what each of the user choices does to the couplings of the
         model: which ones it drops and which ones it fuses with another.
 
@@ -9097,14 +9137,9 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
         if base is None:
             base = model_reader.ModelReader(
                         import_ufo.import_model(model_path, restrict=False))
-        logger.info('Restriction report: analysing %d choice(s), one '
-                    'evaluation of the couplings each', len(groups))
-
-        unrestricted = check_param_card.ParamCard(default_card)
-        self.randomize_param_card(unrestricted, externals)
-        restricted = check_param_card.ParamCard(unrestricted)
-        self.apply_customize_rules(restricted, categories, set_zero, set_one,
-                                                                     set_equal)
+        self.log_report_banner('Restriction report: analysing %d restriction(s),'
+                               ' one evaluation of the couplings each'
+                               % len(groups))
 
         # what is already zero/fused without any restriction is a property of
         # the model, not something the user did
@@ -9114,8 +9149,9 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
         all_fused -= base_fused
         base_pdrop, base_pfuse = self.get_parameter_classes(unrestricted, externals)
         logger.info('  in total: %d coupling(s) dropped, %d fused (%d and %d are'
-                    ' already so in the unrestricted model)',
-                    len(all_zero), len(all_fused), len(base_zero), len(base_fused))
+                    ' already so in the unrestricted model)' % (len(all_zero),
+                    len(all_fused), len(base_zero), len(base_fused)),
+                    '$MG:color:GREEN')
 
         # what each choice does on its own. Reported as it is computed: on a
         # large model each of those is a full evaluation of the couplings.
@@ -9147,26 +9183,43 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
         conjunction = (all_zero | all_fused) - explained
 
         if shared:
-            logger.info('  %d coupling(s) are covered by more than one of your '
-                        'choices: %s', len(shared), self.short_list(shared))
+            logger.info('  %d coupling(s) are covered by more than one '
+                        'restriction: %s' % (len(shared),
+                        self.short_list(shared)), '$MG:color:BLUE')
         if conjunction:
-            logger.info('  %d coupling(s) only through several choices at once:'
-                        ' %s', len(conjunction), self.short_list(conjunction))
+            logger.info('  %d coupling(s) only through several of them at once:'
+                        ' %s' % (len(conjunction),
+                        self.short_list(conjunction)), '$MG:color:BLUE')
+        self.log_report_banner()
 
         return alone, (base_zero, base_fused), conjunction
+
+    REPORT_WIDTH = 78
+
+    @classmethod
+    def log_report_banner(cls, text=None):
+        """a separator -and optionally a title- around a restriction report.
+        Those reports are printed in the middle of the (verbose) log of a model
+        import, so they need to stand out."""
+
+        logger.info('=' * cls.REPORT_WIDTH, '$MG:color:GREEN')
+        if text is not None:
+            logger.info(' %s' % text, '$MG:color:GREEN')
+            logger.info('=' * cls.REPORT_WIDTH, '$MG:color:GREEN')
 
     def log_restriction_group(self, model, entry):
         """the part of the --explain report which concerns a single choice"""
 
         label, zero, fused, params = entry
         if not zero and not fused and not params:
-            logger.info('  %-38s changes nothing', label)
+            logger.info('  %-38s changes nothing' % label, '$MG:color:BLACK')
             return
         nb_removed, nb_modified = self.get_interaction_impact(model, zero)
         logger.info('  %-38s %d coupling(s) dropped, %d fused, %d '
-                    'interaction(s) removed%s', label, len(zero), len(fused),
+                    'interaction(s) removed%s' % (label, len(zero), len(fused),
                     nb_removed,
-                    ', %d modified' % nb_modified if nb_modified else '')
+                    ', %d modified' % nb_modified if nb_modified else ''),
+                    '$MG:BOLD')
         if zero:
             logger.info('  %-38s   dropped: %s', '', self.short_list(zero))
         if fused:
@@ -9183,6 +9236,119 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
         if len(names) <= nb:
             return ', '.join(names)
         return '%s, ... (%d more)' % (', '.join(names[:nb]), len(names) - nb)
+
+    @staticmethod
+    def get_lha2name(model_path):
+        """(lhablock in lower case, lhacode) -> the name of the parameter as
+        the UFO -and so the user- spells it (no 'mdl_' prefix). The block is
+        lowered because a UFO spells it as it likes ('Wolfenstein' in the sm)."""
+
+        ufo_model = ufomodels.load_model(model_path)
+        return dict(((param.lhablock.lower(), tuple(param.lhacode)), param.name)
+                    for param in ufo_model.all_parameters
+                    if param.nature == 'external')
+
+    @staticmethod
+    def name_of_lha(lha2name, key):
+        """the name of a (lhablock, lhacode), whatever the case of the block"""
+
+        return lha2name.get((key[0].lower(), tuple(key[1])), None) or \
+               '%s %s' % (key[0], list(key[1]))
+
+    @staticmethod
+    def get_card_restriction_groups(param_card, externals, lha2name=None):
+        """the restrictions a param_card contains, as the (label, keys) groups
+        a report attributes a removal to: the parameters it sets to zero or to
+        one, and the families which share a value inside a block."""
+
+        lha2name = lha2name or {}
+
+        def name(key):
+            return MadGraphCmd.name_of_lha(lha2name, key)
+
+        groups, by_value = [], {}
+        for block in param_card:
+            if block.startswith(('qnumbers', 'decay_table')) or 'info' in block:
+                continue
+            for param in param_card[block]:
+                key = (block.lower(), tuple(param.lhacode))
+                if key not in externals:
+                    continue
+                try:
+                    value = float(param.value)
+                except (TypeError, ValueError):
+                    continue
+                if value in (0., 1.):
+                    groups.append(('%s = %d' % (name(key), value), set([key])))
+                elif block.lower() != 'decay': # widths are never fused
+                    by_value.setdefault((block.lower(), abs(value)), []).append(key)
+
+        for value in sorted(by_value):
+            keys = by_value[value]
+            if len(keys) > 1:
+                groups.append((' = '.join(name(key) for key in keys), set(keys)))
+        return groups
+
+    def do_explain_restriction(self, line):
+        """explain what a restriction card removes from a model"""
+
+        args = self.split_arg(line)
+        self.check_explain_restriction(args)
+
+        model_path, restrict_file = self.get_restriction_to_explain(args)
+        logger.info('Explaining %s on the model %s', os.path.basename(restrict_file),
+                    os.path.basename(model_path.rstrip('/')))
+
+        model = import_ufo.import_model(model_path, restrict=False)
+        externals = self.get_external_lhacode(model)
+        default_card = self.get_full_param_card(model)
+
+        restricted = check_param_card.ParamCard(restrict_file)
+        groups = self.get_card_restriction_groups(restricted, externals,
+                                            self.get_lha2name(model_path))
+        if not groups:
+            logger.info('%s does not restrict anything in this model.',
+                        os.path.basename(restrict_file))
+            return
+
+        # everything the card does not restrict has to come from the model, so
+        # the reference is the default values, with the ones which would be
+        # simplified by accident randomized (as customize_model does)
+        unrestricted = check_param_card.ParamCard(default_card)
+        self.randomize_param_card(unrestricted, externals)
+
+        self.explain_restriction(model_path, externals, groups, unrestricted,
+                                 restricted)
+
+    def get_restriction_to_explain(self, args):
+        """(model path, restriction card) of an 'explain_restriction' argument:
+        a card, a 'model-restriction' name, or nothing for the current model"""
+
+        if not args:
+            model = self._curr_model
+            # RestrictModel keeps it as an attribute, not as a key
+            restrict_file = getattr(model, 'restrict_card', None)
+            if not isinstance(restrict_file, str):
+                raise self.InvalidCmd('The current model is not restricted by '
+                    'a card. Give one (or a model name like sm-ckm) to explain.')
+            return model.get('modelpath'), restrict_file
+
+        if os.path.isfile(args[0]):
+            if not self._curr_model:
+                raise self.InvalidCmd('Import a model before explaining one of '
+                                      'its restriction cards.')
+            return self._curr_model.get('modelpath'), args[0]
+
+        try:
+            model_path, restrict_file, restrict_name = \
+                                        import_ufo.get_path_restrict(args[0])
+        except Exception as error:
+            raise self.InvalidCmd('%s is neither a restriction card nor a model'
+                                  ' name: %s' % (args[0], error))
+        if not restrict_file:
+            raise self.InvalidCmd('%s does not select any restriction card.'
+                                  % args[0])
+        return model_path, restrict_file
 
     def do_customize_model(self, line):
         """create a restriction card in a interactive way"""
@@ -9264,8 +9430,13 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
             groups = self.get_restriction_groups(categories, set_zero, set_one,
                                           set_equal, ask_instance.lha2name)
             try:
-                self.explain_restriction(model_path, default_card, externals,
-                        groups, categories, set_zero, set_one, set_equal,
+                unrestricted = check_param_card.ParamCard(default_card)
+                self.randomize_param_card(unrestricted, externals)
+                restricted = check_param_card.ParamCard(unrestricted)
+                self.apply_customize_rules(restricted, categories, set_zero,
+                                                        set_one, set_equal)
+                self.explain_restriction(model_path, externals, groups,
+                        unrestricted, restricted,
                         base=explainer.model if explainer else None)
             except Exception as error:
                 # the report is informative only: never let it break the command
@@ -12309,10 +12480,13 @@ class RestrictionExplainer(object):
         # the starting point is the question as it opens, i.e. the default
         # value of the options, not the unrestricted model
         self.state = self.evaluate(self.apply(categories, [], [], []))
-        logger.info('Default choices of this model: %d coupling(s) dropped, '
-                    '%d fused, %d parameter(s) restricted.'
-                    '\n  Each command will report what it changes.',
-                    *[len(entries) for entries in self.state])
+        cmd.log_report_banner('Restriction report (live): the default choices of'
+                              ' this model already drop %d coupling(s), fuse %d'
+                              ' and restrict %d parameter(s).'
+                              % tuple(len(entries) for entries in self.state))
+        logger.info(' Each command you enter is followed by what it changes.',
+                    '$MG:color:GREEN')
+        MadGraphCmd.log_report_banner()
 
     def apply(self, categories, set_zero, set_one, set_equal):
         """the param_card for the choices made so far"""
@@ -12347,9 +12521,7 @@ class RestrictionExplainer(object):
         def name(key):
             if not isinstance(key, tuple):
                 return str(key)
-            return lha2name.get(key, None) or \
-                   lha2name.get((key[0].upper(), key[1]), '%s %s' % (key[0],
-                                                              list(key[1])))
+            return MadGraphCmd.name_of_lha(lha2name, key)
 
         changes = [('+', new_zero - old_zero, 'coupling(s) dropped'),
                    ('-', old_zero - new_zero, 'coupling(s) back in the model'),
@@ -12368,10 +12540,12 @@ class RestrictionExplainer(object):
             if not entries:
                 continue
             changed = True
-            logger.info('  %s%d %s: %s', sign, len(entries), title,
-                        self.cmd.short_list([name(key) for key in entries]))
+            logger.info('  %s%d %s: %s' % (sign, len(entries), title,
+                        self.cmd.short_list([name(key) for key in entries])),
+                        '$MG:color:GREEN' if sign == '+' else '$MG:color:BLUE')
         if not changed:
-            logger.info('  no change on the couplings/parameters of the model')
+            logger.info('  no change on the couplings/parameters of the model',
+                        '$MG:color:BLACK')
 
 
 class AskforModelName(cmd.SmartQuestion):
@@ -12418,8 +12592,7 @@ class AskforCustomize(cmd.SmartQuestion):
         self.ufo_couplings = dict((coupling.name.lower(), coupling)
                                   for coupling in ufo_model.all_couplings)
         # (lhablock, lhacode) -> name, to display a parameter as the user knows it
-        self.lha2name = dict(((param.lhablock, tuple(param.lhacode)), param.name)
-                             for param in self.external_params.values())
+        self.lha2name = MadGraphCmd.get_lha2name(model_path)
 
         # the customizations which are not a simple on/off switch
         self.set_zero = []    # [(lhablock, lhacode)]
@@ -12756,6 +12929,152 @@ class AskforCustomize(cmd.SmartQuestion):
         self.formula_target = {}
         self.explain_change()
 
+    #===========================================================================
+    # looking at the model while answering the question
+    #===========================================================================
+    def do_display(self, line):
+        """display the parameters/couplings of the model, so that one knows
+        what to give to set_zero/set_one/set_equal"""
+
+        self.value = 'repeat'
+        args = line.split()
+        if not args:
+            logger.warning('Invalid display command. Syntax is: '
+                           'display parameters|couplings [NAME]')
+            return
+        if args[0].startswith('param'):
+            self.display_parameters(args[1:])
+        elif args[0].startswith('coupl'):
+            self.display_couplings(args[1:])
+        else:
+            logger.warning('Invalid display command. %s is not one of '
+                           'parameters/couplings.', args[0])
+
+    def get_current_restrictions(self):
+        """(lhablock, lhacode) -> what the choices made so far do to it"""
+
+        out = {}
+        for category in self.all_categories:
+            for option in category:
+                for lhablock, lhacode, value in option.get_rules():
+                    out[(lhablock.lower(), tuple(lhacode))] = \
+                                        '%g (%s)' % (value, option.name)
+        for param in self.set_zero:
+            out[(param[0].lower(), param[1])] = '0'
+        for param in self.set_one:
+            out[(param[0].lower(), param[1])] = '1'
+        for param, param2 in self.set_equal:
+            out[(param[0].lower(), param[1])] = \
+                        MadGraphCmd.name_of_lha(self.lha2name, param2)
+        for name, expr in self.new_formula:
+            key = self.formula_target.get(name, None)
+            if key:
+                out[(key[0].lower(), key[1])] = expr
+        return out
+
+    def display_parameters(self, args):
+        """the external parameters, by block, with the effect of the choices
+        made so far. Without argument the full list, with one only the block or
+        the parameters whose name contains it."""
+
+        pattern = args[0].lower() if args else None
+        restricted = self.get_current_restrictions()
+
+        selected = {}
+        for param in self.external_params.values():
+            if pattern is None or pattern == param.lhablock.lower() \
+                               or pattern in param.name.lower():
+                selected.setdefault(param.lhablock, []).append(param)
+
+        if not selected:
+            if not self.display_internal(pattern):
+                logger.info('No parameter of this model matches \'%s\'.', args[0])
+            return
+
+        nb = sum(len(params) for params in selected.values())
+        if pattern is None and nb > 300:
+            logger.info('This model has %d external parameters. Give a block or '
+                'a part of a name to list them:\n    %s', nb,
+                '\n    '.join('%-20s %d parameter(s)' % (block, len(params))
+                              for block, params in sorted(selected.items())))
+            return
+
+        for block in sorted(selected):
+            logger.info('%s', block)
+            for param in sorted(selected[block],
+                                key=lambda p: self.natural_key(p.name)):
+                key = (block.lower(), tuple(param.lhacode))
+                logger.info('    %-22s %-8s %-14s %s', param.name,
+                            ' '.join(str(code) for code in param.lhacode),
+                            self.format_value(param.value),
+                            '-> %s' % restricted[key] if key in restricted else '')
+        if pattern is not None:
+            self.display_internal(pattern)
+
+    def display_internal(self, pattern):
+        """the internal parameters matching pattern. They can not be restricted
+        but the user has to be able to find out why."""
+
+        if pattern is None:
+            return False
+        matching = [param for param in self.internal_params.values()
+                    if pattern in param.name.lower()]
+        if not matching:
+            return False
+        logger.info('internal parameter(s) (computed from the ones of the '
+                    'param_card, they can not be restricted):')
+        for param in sorted(matching, key=lambda p: self.natural_key(p.name)):
+            logger.info('    %-22s = %s', param.name, param.value)
+        return True
+
+    def display_couplings(self, args):
+        """the couplings of the model, with their expression"""
+
+        pattern = args[0].lower() if args else None
+        matching = [coupling for coupling in self.ufo_couplings.values()
+                    if pattern is None or pattern in coupling.name.lower()]
+        if not matching:
+            logger.info('No coupling of this model matches \'%s\'.', args[0])
+            return
+        if pattern is None and len(matching) > 300:
+            logger.info('This model has %d couplings. Give a name -or a part '
+                        'of one- to list them.', len(matching))
+            return
+        for coupling in sorted(matching, key=lambda c: self.natural_key(c.name)):
+            logger.info('    %-14s = %s', coupling.name, coupling.value)
+
+    @staticmethod
+    def format_value(value):
+        """the default value of a parameter, as the param_card shows it"""
+
+        try:
+            return '%.6g' % float(value)
+        except (TypeError, ValueError):
+            return str(value)
+
+    @staticmethod
+    def natural_key(name):
+        """sort GC_9 before GC_10"""
+
+        return [int(part) if part.isdigit() else part
+                for part in re.split(r'(\d+)', name)]
+
+    def complete_display(self, text, line, begidx, endidx):
+        """ Complete the display command"""
+
+        signal.alarm(0) # avoid timer if any
+        args = self.split_arg(line[0:begidx])
+        if len(args) == 1:
+            return self.list_completion(text, ['parameters', 'couplings'], line)
+        if args[1].startswith('coupl'):
+            return self.list_completion(text,
+                    [coupling.name for coupling in self.ufo_couplings.values()],
+                    line)
+        blocks = sorted(set(param.lhablock
+                            for param in self.external_params.values()))
+        return self.list_completion(text, blocks +
+                    [param.name for param in self.external_params.values()], line)
+
     def get_question(self):
         """define the current question."""
 
@@ -12775,8 +13094,9 @@ class AskforCustomize(cmd.SmartQuestion):
                         ' (%s)' % options.description if options.description else '')
         question += 'Enter a number to change it\'s status or press enter to validate.\n'
 
-        fmt = lambda key: '%s (%s %s)' % (self.lha2name.get(key, '?'),
-                                          key[0], list(key[1]))
+        fmt = lambda key: '%s (%s %s)' % (
+                    MadGraphCmd.name_of_lha(self.lha2name, key).split(' ')[0],
+                    key[0], list(key[1]))
         current = []
         for param in self.set_zero:
             current.append('    %s = 0' % fmt(param))
@@ -12794,7 +13114,7 @@ class AskforCustomize(cmd.SmartQuestion):
         else:
             question += '    none\n'
 
-        question += 'For the other commands (set_equal, formula, coupling, clear),\n'
+        question += 'For the other commands (set_equal, formula, coupling, display, clear),\n'
         question += 'or for scripting this function, please type: \'help\''
         return question
 
@@ -12904,6 +13224,9 @@ class AskforCustomize(cmd.SmartQuestion):
         print('   set_one NAME           : set the external parameter NAME to one')
         print('   set_equal NAME1 NAME2  : force NAME1 to take the value of NAME2')
         print('   clear                  : forget all those modifications')
+        print('   display parameters [X] : the parameters of the model (all of')
+        print('                            them, or the block/names matching X)')
+        print('   display couplings [X]  : the couplings, with their expression')
         print('')
         print('The \'set\' command is a shortcut for the three of them when its')
         print('first argument is a parameter of the model:')
