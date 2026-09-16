@@ -63,13 +63,29 @@ class ChoiceOption(object):
         return status
 
     def set_status(self, value):
-        """set the option to one of its allowed values"""
+        """set the option to one of its allowed values. The value is case
+        insensitive and can be an unambiguous abbreviation of a label, so that
+        'set flavourscheme 5' is the same as 'set flavourscheme 5F'."""
 
-        value = str(value)
-        if value not in self.labels:
-            raise ValueError('%s is not a valid value for \'%s\'. Valid values are: %s'
-                             % (value, self.name, ', '.join(self.labels)))
-        self.status = value
+        self.status = self.resolve(value)
+
+    def resolve(self, value):
+        """the label a user input refers to"""
+
+        text = str(value).strip()
+        if text in self.labels:
+            return text
+        for candidates in ([label for label in self.labels
+                            if label.lower() == text.lower()],
+                           [label for label in self.labels
+                            if label.lower().startswith(text.lower())]):
+            if len(candidates) == 1:
+                return candidates[0]
+            if len(candidates) > 1:
+                raise ValueError('%s is ambiguous for \'%s\': it can be %s'
+                                 % (value, self.name, ', '.join(candidates)))
+        raise ValueError('%s is not a valid value for \'%s\'. Valid values are: %s'
+                         % (value, self.name, ', '.join(self.labels)))
 
     def next_status(self):
         """cycle to the next allowed value (interactive toggle)"""

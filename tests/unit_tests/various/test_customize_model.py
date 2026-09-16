@@ -128,6 +128,38 @@ class TestChoiceOption(unittest.TestCase):
         self.assertEqual(option.status, 'b')
         self.assertRaises(ValueError, option.set_status, 'd')
 
+    def test_an_abbreviation_is_accepted(self):
+        """'set flavourscheme 5' is the same as 'set flavourscheme 5F'"""
+
+        option = build_restrict_lib.ChoiceOption('flavour scheme',
+                    [('3F', []), ('4F', []), ('5F', [])], '4F')
+        option.set_status('5')
+        self.assertEqual(option.status, '5F')
+        option.set_status('3f')     # case insensitive
+        self.assertEqual(option.status, '3F')
+        option.set_status(' 4 ')    # and spaces around it
+        self.assertEqual(option.status, '4F')
+        # an exact label still wins, and an unknown one is still refused
+        option.set_status('5F')
+        self.assertEqual(option.status, '5F')
+        self.assertRaises(ValueError, option.set_status, '9')
+        self.assertRaises(ValueError, option.set_status, 'F')
+
+    def test_an_ambiguous_abbreviation_is_refused(self):
+        option = build_restrict_lib.ChoiceOption('scheme',
+                    [('3F', []), ('3G', [])], '3F')
+        self.assertRaises(ValueError, option.set_status, '3')
+        self.assertEqual(option.status, '3F') # unchanged
+        option.set_status('3G')
+        self.assertEqual(option.status, '3G')
+
+    def test_an_exact_label_wins_over_a_prefix(self):
+        """with labels '1' and '10', '1' is the first one"""
+
+        option = build_restrict_lib.ChoiceOption('nb', [('1', []), ('10', [])], '1')
+        option.set_status('1')
+        self.assertEqual(option.status, '1')
+
     def test_get_rules(self):
         option = self.get_option()
         self.assertEqual(option.get_rules(), [])

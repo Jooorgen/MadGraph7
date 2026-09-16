@@ -13367,6 +13367,7 @@ class AskforCustomize(cmd.SmartQuestion):
         print('   NAME is the description of the option where you remove all spaces')
         print('   VALUE is either True/False or, for the options with more than')
         print('         two values, one of the value proposed within the bracket')
+        print('         (an unambiguous abbreviation is enough: 5 for 5F)')
         print(' Example: For the question')
         print('''     sm customization:
         1: diagonal ckm [True]
@@ -13376,7 +13377,7 @@ class AskforCustomize(cmd.SmartQuestion):
     Enter a number to change it's status or press enter to validate.''')
         print(''' you can answer by''')
         print('   set diagonalckm False')
-        print('   set flavourscheme 5F')
+        print('   set flavourscheme 5F        (or just: set flavourscheme 5)')
         print('   set nbofmassiveleptons 0')
         print('')
         print('On top of those options, the following commands are available:')
