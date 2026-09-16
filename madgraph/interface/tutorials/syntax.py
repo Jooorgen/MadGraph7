@@ -29,7 +29,7 @@ P = 'MG7>'
 tutorial = Tutorial(
     name='syntax',
     title='the process generation syntax',
-    description='orders, interference, decay chains, s-channels, gauge traps, NLO',
+    description='orders, interference, decay chains, s-channels, gauge traps, polarisation',
     order='sequence',
     steps=[
 
@@ -109,18 +109,27 @@ process before it, and parentheses nest.
 Two things to keep in mind:
  * identical particles are ALL decayed -- you cannot decay one top and leave
    the other alone by writing the decay once;
- * a decay chain is an on-shell approximation. Its cross section carries a
-   branching ratio built from the widths in the *param_card*, so changing a
-   mass without recomputing the width silently corrupts the answer. (See the
-   `exercises` tutorial for what that looks like when it goes wrong.)
+ * a decay chain is neither on-shell nor a branching ratio. It is the full
+   matrix element, production times propagator times decay, with the spin
+   correlations kept and the resonance left off shell -- spread over its
+   Breit-Wigner out to `bwcutoff` widths from the pole. What it drops is the
+   diagrams that do not go through that resonance.
+
+That second point is why the width catches people. The width in the
+*param_card* sits in the propagator denominator; the decay rate comes back out
+of the matrix element itself, and nothing divides one by the other. There is no
+branching ratio to normalise, so nothing keeps the effective fraction under 1:
+change a mass, leave the width alone, and the decayed cross section can come
+out *larger* than the undecayed one. (The `exercises` tutorial makes that
+happen on purpose.)
 
 MadSpin is the run-time alternative: it decays events after generation and
 keeps spin correlations, without multiplying the number of diagrams.
 
 This is also the *safe* way to ask for a resonance. Production and decay are
 each a complete set of diagrams, so each is gauge invariant on its own, and
-the approximation you are making is a stated one: on shell, times a branching
-ratio. The next two lessons do a similar-looking job by reaching inside a
+what you dropped is stated plainly: the diagrams that do not go through the
+resonance. The next two lessons do a similar-looking job by reaching inside a
 single amplitude, and that is where it gets delicate.
 """ % {'p': P},
      title='decay chains',
@@ -192,18 +201,17 @@ imported, which `generate` does for you but `check` does not.)
      solution='generate p p > e+ e- / a'),
 
 Step('generate', """
-`add process` puts a second process in the same output, and `@N` tags it so
-you can tell the pieces apart afterwards.
+`add process` puts a second process into the same output. It takes exactly the
+same syntax as `generate`, and it accumulates instead of replacing.
 
-%(p)s add process p p > w+ j, w+ > l+ vl @2
+%(p)s add process p p > w+ j, w+ > l+ vl
 
-`display processes` lists everything defined so far. The tag ends up in the
-output directory names and in the event file, which is how you separate the
-contributions of a multi-process run.
+`display processes` lists everything defined so far, `display diagrams` draws
+all of it, and everything you have added goes into the next `output`.
 """ % {'p': P},
      title='several processes at once',
-     hint="'add process' takes the same syntax as 'generate', plus '@N'.",
-     solution='add process p p > w+ j, w+ > l+ vl @2'),
+     hint="'add process' takes the same syntax as 'generate'.",
+     solution='add process p p > w+ j, w+ > l+ vl'),
 
 Step('add', """
 Polarisation. `{X}` after a (multi)particle fixes its helicity: `{L}` and
@@ -213,42 +221,13 @@ particles before a decay chain.
 
 %(p)s generate p p > z{0} z{T}, z > e+ e-
 
-The process line is only half of it -- the run needs three settings too, and
-forgetting them is the usual failure:
- * `set group_subprocesses False` BEFORE generating, or the polarisations get
-   grouped away;
- * `nhel = 1` in the run card;
- * `me_frame` in the run card, naming the legs that define the rest frame.
-
-Careful with `me_frame`: it indexes the NORMALISED leg order, not the order
-you wrote in the process line. For `p p > w+ z j j, w+ > l+ vl, z > l+ l-`
-the WZ rest frame is `me_frame = [3,4,5,6]`.
+The process line is only half of it. A polarisation is defined in a frame, and
+which frame is a run-card setting -- `me_frame` -- so it is chosen at `launch`,
+not here. `tutorial madevent` reaches the cards and goes through it.
 """ % {'p': P},
      title='polarisation',
      hint="Append '{0}' or '{T}' to a particle name.",
      solution='generate p p > z{0} z{T}, z > e+ e-'),
-
-Step('generate', """
-Finally, NLO. Square brackets after the process ask for the loop and
-real-emission contributions:
-
-  [QCD]          the full NLO computation, ready for aMC@NLO
-  [real=QCD]     real-emission diagrams only
-  [virt=QCD]     loop diagrams only, for standalone MadLoop
-  [noborn=QCD]   loop-induced, for processes with no Born
-
-%(p)s generate p p > t t~ [QCD]
-
-Watch what happens: MG5 switches to the aMC@NLO interface by itself, because
-the process asked for it. This tutorial keeps running across that switch.
-
-Order constraints mean different things either side of the bracket: those
-BEFORE `[` restrict the Born amplitude, those AFTER `]` restrict the squared
-matrix element. And decay chains are not allowed at NLO -- use MadSpin.
-""" % {'p': P},
-     title='NLO processes',
-     hint="Put '[QCD]' at the end of the process line.",
-     solution='generate p p > t t~ [QCD]'),
 
 Step('generate', """
 That is the syntax tour. A few things worth remembering:
@@ -261,7 +240,7 @@ That is the syntax tour. A few things worth remembering:
 
 Where to go next:
  * `tutorial lo`         take a process all the way to events
- * `tutorial nlo`        run the NLO process you just generated
+ * `tutorial nlo`        the same process line at next-to-leading order
  * `tutorial exercises`  practise, with the answers checked
  * `tutorial list`       everything on offer
 
