@@ -545,8 +545,9 @@ class HelpToCmd(cmd.HelpCmd):
         logger.info("    available for future import with the command 'import model XXXX-NAME'")
         logger.info("    Changing the formula of a parameter/coupling is also possible but")
         logger.info("    requires to write a new UFO model (and is not compatible with --save)")
-        logger.info("    --explain reports which of your choices is responsible for each")
-        logger.info("    coupling removed from the model.")
+        logger.info("    --explain=life (or --explain) reports what each command you")
+        logger.info("    enter changes in the model, --explain=final reports which of your")
+        logger.info("    choices is responsible for each coupling removed from it.")
 
     def help_output(self):
         logger.info("syntax: output [" + "|".join(self._export_formats) + \
@@ -1021,6 +1022,26 @@ class HelpToCmd(cmd.HelpCmd):
 #===============================================================================
 # CheckValidForCmd
 #===============================================================================
+#===============================================================================
+# customize_model --explain
+#===============================================================================
+# 'life' reports what each command does while the question is answered,
+# 'final' reports which choice is responsible for what once it is closed.
+CUSTOMIZE_EXPLAIN_MODES = ['life', 'final']
+CUSTOMIZE_EXPLAIN_ALIAS = {'live': 'life'} # 'live' is the spelling one expects
+
+
+def parse_explain_mode(arg):
+    """the mode of a --explain/--explain=MODE argument (None if arg is neither)"""
+
+    if arg == '--explain':
+        return 'life'
+    if not arg.startswith('--explain='):
+        return None
+    mode = arg.split('=', 1)[1].lower()
+    return CUSTOMIZE_EXPLAIN_ALIAS.get(mode, mode)
+
+
 class CheckValidForCmd(cmd.CheckCmd):
     """ The Series of help routine for the MadGraphCmd"""
 
@@ -1677,7 +1698,12 @@ This will take effect only in a NEW terminal
 
         # Check argument validity
         for arg in args:
-            if arg == '--explain':
+            if arg == '--explain' or arg.startswith('--explain='):
+                mode = parse_explain_mode(arg)
+                if mode not in CUSTOMIZE_EXPLAIN_MODES:
+                    raise self.InvalidCmd('Valid values for --explain are: %s '
+                        '(--explain alone means --explain=life).'
+                        % ', '.join(CUSTOMIZE_EXPLAIN_MODES))
                 continue
             if arg.startswith('--save='):
                 if '-' in arg.split('=', 1)[1]:
@@ -2486,7 +2512,8 @@ class CompleteForCmd(cmd.CompleteCmd):
         args = self.split_arg(line[0:begidx])
 
         # Format
-        return self.list_completion(text, ['--save=', '--explain'])
+        return self.list_completion(text, ['--save=', '--explain',
+                    '--explain=life', '--explain=final'])
 
 
     def complete_check(self, text, line, begidx, endidx, formatting=True):
@@ -9165,7 +9192,9 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
 
         name = ([a.split('=', 1)[1] for a in args if a.startswith('--save=')]
                                                                       + [None])[0]
-        explain = '--explain' in args
+        # the last --explain given wins, None if there is none
+        explain = ([None] + [parse_explain_mode(a) for a in args
+                             if parse_explain_mode(a)])[-1]
         model_path = self._curr_model.get('modelpath')
         # the model as currently loaded: only used to know which of the generic
         # options are already applied (it defines their default value)
@@ -9178,11 +9207,13 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
             self._curr_model = reference_model
             raise
 
-    def customize_model(self, model_path, reference_model, name, explain=False):
+    def customize_model(self, model_path, reference_model, name, explain=None):
         """the body of do_customize_model. model_path is the model to
         customize, reference_model the model as currently loaded and name the
         name of the restriction to save (None to only modify the model in
-        memory). explain asks for a report of what each choice did remove."""
+        memory). explain is 'life' to report what each command changes while
+        the question is answered, 'final' to report which choice is responsible
+        for what once it is closed, None for no report at all."""
 
         # (re)import the full model (get rid of the default restriction)
         self._curr_model = import_ufo.import_model(model_path, restrict=False)
@@ -9190,7 +9221,7 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
                                                    reference_model)
 
         explainer = None
-        if explain:
+        if explain == 'life':
             explainer = RestrictionExplainer(self, model_path,
                 self.get_full_param_card(self._curr_model),
                 self.get_external_lhacode(self._curr_model), categories)
@@ -9229,7 +9260,7 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
             model_path, default_card, externals, categories, set_zero, set_one,
             set_equal)
 
-        if explain:
+        if explain == 'final':
             groups = self.get_restriction_groups(categories, set_zero, set_one,
                                           set_equal, ask_instance.lha2name)
             try:

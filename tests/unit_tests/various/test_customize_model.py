@@ -767,3 +767,48 @@ class TestSetShortcut(unittest.TestCase):
         self.assertTrue('MT' in out)
         self.assertFalse('MB' in out)
         self.assertFalse('ymb' in out)
+
+
+#===============================================================================
+# the --explain modes
+#===============================================================================
+class TestExplainModes(unittest.TestCase):
+    """--explain=life reports each command, --explain=final reports the
+    attribution once the question is closed, --explain alone means life."""
+
+    def test_parse(self):
+        parse = mg_interface.parse_explain_mode
+        self.assertEqual(parse('--explain'), 'life')
+        self.assertEqual(parse('--explain=life'), 'life')
+        self.assertEqual(parse('--explain=final'), 'final')
+        # 'live' is the spelling one expects, accept it too
+        self.assertEqual(parse('--explain=live'), 'life')
+        self.assertEqual(parse('--explain=LIFE'), 'life')
+
+    def test_parse_of_something_else(self):
+        parse = mg_interface.parse_explain_mode
+        self.assertEqual(parse('--save=NAME'), None)
+        self.assertEqual(parse(''), None)
+        # a wrong value is parsed, and refused by check_customize_model
+        self.assertEqual(parse('--explain=bogus'), 'bogus')
+
+    def test_check_accepts_the_valid_modes(self):
+        cmd = mg_interface.MadGraphCmd()
+        for args in [[], ['--explain'], ['--explain=life'], ['--explain=final'],
+                     ['--explain=live'], ['--save=NAME', '--explain=final'],
+                     ['--explain', '--save=NAME']]:
+            cmd.check_customize_model(list(args))
+
+    def test_check_refuses_an_unknown_mode(self):
+        cmd = mg_interface.MadGraphCmd()
+        for args in [['--explain=bogus'], ['--explain=']]:
+            self.assertRaises(mg_interface.MadGraph5Error,
+                              cmd.check_customize_model, list(args))
+
+    def test_the_last_one_wins(self):
+        """'--explain --explain=final' asks for the final report"""
+
+        args = ['--explain', '--explain=final']
+        explain = ([None] + [mg_interface.parse_explain_mode(a) for a in args
+                             if mg_interface.parse_explain_mode(a)])[-1]
+        self.assertEqual(explain, 'final')

@@ -29,18 +29,19 @@ ANNOUNCEMENT:
        customization is refused with a warning otherwise). A param_NAME.dat holding
        the default value of all the non-restricted parameters is now written next to
        restrict_NAME.dat, and the model kept in memory uses those default values.
-       'customize_model --explain' reports what each of your choices does to the
-       model: how many couplings it drops, how many it fuses with another one,
+       'customize_model --explain=final' reports what each of your choices does to
+       the model: how many couplings it drops, how many it fuses with another one,
        how many interactions go away and how many parameters leave the
        param_card, plus the couplings that several of your choices would remove
        independently. The attribution is done by evaluating the couplings once
        per choice with that choice -and only that one- applied, so it reads
        values only and can not change the resulting model. Each choice is
        reported as soon as it is evaluated, since on a large model every one of
-       them is a full evaluation of the couplings. On top of that report, each
-       command entered at the question is followed by what it changed (couplings
+       them is a full evaluation of the couplings.
+       'customize_model --explain=life' (or just --explain) instead follows each
+       command entered at the question with what that command changed (couplings
        dropped/fused, parameters restricted), so the effect of a choice is seen
-       while the model is being customized and not only at the end.
+       while the model is being customized rather than only at the end.
        Fix as well 'customize_model' being unusable from a script (the answer to the
        question was not returned to the command) and the resulting model not being
        flavour-grouped/multiparticle-refreshed as 'import model NAME-restriction' is.
