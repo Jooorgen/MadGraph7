@@ -86,7 +86,15 @@ class TutorialMixin(object):
         if step is not None:
             expected = step.get_solution(self)
 
+        # a step which knows why this particular command fails says so first
+        advice = None
+        found = session.step_for(line, self)
+        if found is not None:
+            advice = found[1].get_failure_advice(self)
+
         text = 'That command did not run, so the tutorial stays where it is.'
+        if advice:
+            text = '%s\n%s' % (advice, text)
         if expected:
             text += '\nIt is still waiting for:\n  %s' % expected
         text += "\nType `hint` for a hint, or `tutorial stop` to leave."

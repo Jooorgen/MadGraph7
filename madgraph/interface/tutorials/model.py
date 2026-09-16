@@ -140,7 +140,7 @@ Step('set', """
 
 Comparing unitary and Feynman is also the cheapest test that a model is
 self-consistent -- that is exactly what `check gauge` does for you. It compares
-them for a process, so give it one: `check gauge p p > t t~`.
+them for a process, so give it one: `check gauge p p > e+ e-`.
 
 Two more model-level settings:
   set complex_mass_scheme True   widths in the propagator *and* in the
@@ -159,18 +159,19 @@ Now something you will use constantly:
 Step('check', """
 `check gauge` compares the gauges for *a process*, so it needs one:
 
-  check gauge p p > t t~
+  check gauge p p > e+ e-
 
 It generates that process in both gauges and compares the matrix elements
-point by point; they have to agree to numerical precision. On its own, with no
-process, the command only prints its syntax. `check full` runs this and the
-other checks together -- the `checks` tutorial goes through them.
+point by point; they have to agree to numerical precision. `check full` runs
+this and the other checks together -- the `checks` tutorial goes through them.
 
 Back to the model. Give a name to a set of particles:
 %(p)s define v = w+ w- z a
 """ % {'p': P},
      title='a detour: check gauge',
-     hint="`check gauge PROCESS`, for instance `check gauge p p > t t~`.",
+     hint="`check gauge PROCESS`, for instance `check gauge p p > e+ e-`.",
+     on_failure="`check` compares a *process* between two computations, so it "
+                "needs one. Try:\n  check gauge p p > e+ e-",
      solution='define v = w+ w- z a'),
 
 Step('define', """

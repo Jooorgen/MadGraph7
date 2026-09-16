@@ -1653,6 +1653,24 @@ class TutorialFailedCommandTest(unittest.TestCase):
         obj.postcmd(None, 'import model sm')
         self.assertEqual(session.current.title, 'load a model')
 
+    def test_a_step_can_say_why_its_command_failed(self):
+        """'check gauge' needs a process the user has no reason to guess"""
+
+        import madgraph.interface.tutorials as tutorials
+
+        step = [s for s in tutorials.get('model').steps
+                if s.title == 'a detour: check gauge'][0]
+        advice = step.get_failure_advice()
+        self.assertTrue(advice)
+        self.assertTrue('check gauge p p > e+ e-' in advice)
+
+    def test_a_step_without_advice(self):
+        import madgraph.interface.tutorials as tutorials
+
+        step = [s for s in tutorials.get('model').steps
+                if s.title == 'multiparticle labels'][0]
+        self.assertEqual(step.get_failure_advice(), None)
+
     def test_only_the_first_report(self):
         """a script command fails, and the 'import' running it fails in turn"""
 

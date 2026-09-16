@@ -59,10 +59,16 @@ class Step(object):
               `launch` step leads to is the case that matters: it is asked by
               the run interface in the middle of the command, so this is the
               only way a step can say anything there.
+    on_failure
+              printed when a command which would have triggered this step
+              *raised* instead of running, before the generic "that command did
+              not run" line.  For the command a lesson invites the user to try
+              and which needs an argument they have no reason to guess.  May be
+              a callable(interface) -> str.
     """
 
     def __init__(self, key, text, hint=None, solution=None, requires=None,
-                 setup=None, title=None, question_hint=None):
+                 setup=None, title=None, question_hint=None, on_failure=None):
         self.key = key
         self.text = text
         self.hint = hint
@@ -71,6 +77,17 @@ class Step(object):
         self.setup = setup
         self.title = title
         self.question_hint = question_hint
+        self.on_failure = on_failure
+
+    def get_failure_advice(self, interface=None):
+        """What to say when a command meant for this step did not run."""
+
+        if callable(self.on_failure):
+            try:
+                return self.on_failure(interface)
+            except Exception:
+                return None
+        return self.on_failure
 
     def render(self, interface=None):
         """The text to print for this step."""
