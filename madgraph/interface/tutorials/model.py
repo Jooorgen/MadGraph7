@@ -67,8 +67,11 @@ way in when you are chasing where a number comes from.""",
 'multiparticles': """The labels that stand for a set of particles.
 
 `p`, `j`, `l+`, `l-`, `vl` and `vl~` come predefined -- that is why `p p > j j`
-means what it means -- and `p`/`j` follow the flavour scheme of the model, so
-they will change under you when the b becomes massless in a moment.
+means what it means.
+
+`p` and `j` are the gluon plus the quarks the model treats as massless, so
+their content follows the number of massless flavours: four here, and you will
+see them pick up the b when it goes massless in a moment.
 
 You will add your own with `define` later in this tutorial.""",
 
@@ -289,8 +292,12 @@ boson and works anywhere a particle name does:
   generate p p > v v
 
 `p`, `j`, `l+`, `l-`, `vl` and `vl~` are predefined the same way, which is why
-`p p > j j` means what it means. A definition can use `/` to exclude, as in
-`define aUPC = a j / g`.
+`p p > j j` means what it means. What `p` and `j` hold is not fixed: the gluon,
+and every quark the model treats as massless. Their content follows the number
+of massless flavours, so it grew by one when you loaded `sm-no_b_mass` a moment
+ago -- four flavours in the default SM, five with a massless b.
+
+A definition can use `/` to exclude, as in `define aUPC = a j / g`.
 
 See them all, including the one you just made:
 %(p)s display multiparticles

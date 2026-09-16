@@ -1768,6 +1768,17 @@ class StickyStepTest(unittest.TestCase):
         self.assertEqual(session.step_for('set gauge Feynman')[1].title,
                          'gauge and scheme')
 
+    def test_the_define_lesson_says_it_too(self):
+        """the lesson about multiparticles is where it matters most"""
+
+        import madgraph.interface.tutorials as tutorials
+
+        step = [s for s in tutorials.get('model').steps
+                if s.title == 'multiparticle labels'][0]
+        text = step.render(None)
+        self.assertTrue('massless flavours' in text)
+        self.assertTrue('sm-no_b_mass' in text)
+
     def test_explain_restriction_works_from_the_first_import(self):
         """the import of a restricted model suggests it right away"""
 
@@ -1775,6 +1786,12 @@ class StickyStepTest(unittest.TestCase):
         session.advance(session.step_for('import model sm')[0])
         index, step = session.step_for('explain_restriction')
         self.assertEqual(step.title, 'a detour: explain_restriction')
+
+    def test_the_multiparticle_note_says_what_p_and_j_follow(self):
+        import madgraph.interface.tutorials.model as model
+
+        note = model.display_note(None, 'display multiparticles')
+        self.assertTrue('massless flavours' in note)
 
     def test_each_display_has_its_own_note(self):
         import madgraph.interface.tutorials.model as model
