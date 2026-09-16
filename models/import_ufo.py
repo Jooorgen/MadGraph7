@@ -2991,7 +2991,8 @@ class RestrictModel(model_reader.ModelReader):
             self.get('order_hierarchy')
             self.get('expansion_order')
 
-        if os.path.exists(param_card.replace('restrict', 'param')):
+        if isinstance(param_card, str) and \
+                              os.path.exists(param_card.replace('restrict', 'param')):
             path = param_card.replace('restrict', 'param')
             logger.info('default value set as in file %s' % path)
             self.set_parameters_and_couplings(path,

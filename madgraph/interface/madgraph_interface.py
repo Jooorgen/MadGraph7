@@ -101,6 +101,7 @@ import models.import_ufo as import_ufo
 import models.write_param_card as param_writer
 import models.check_param_card as check_param_card
 import models.model_reader as model_reader
+import models.build_restriction_lib as build_restrict_lib
 
 import aloha.aloha_fct as aloha_fct
 import aloha.create_aloha as create_aloha
@@ -536,8 +537,13 @@ class HelpToCmd(cmd.HelpCmd):
     def help_customize_model(self):
         logger.info("syntax: customize_model --save=NAME",'$MG:color:BLUE')
         logger.info("--  Open an invite where you options to tweak the model.",'$MG:BOLD')
+        logger.info("    On top of the options specific to the model, you can choose the")
+        logger.info("    flavour scheme (3F/4F/5F), the number of massive leptons, and set")
+        logger.info("    a parameter to zero/one/to the value of another parameter.")
         logger.info("    If you specify the option --save=NAME, this tweak will be")
         logger.info("    available for future import with the command 'import model XXXX-NAME'")
+        logger.info("    Changing the formula of a parameter/coupling is also possible but")
+        logger.info("    requires to write a new UFO model (and is not compatible with --save)")
 
     def help_output(self):
         logger.info("syntax: output [" + "|".join(self._export_formats) + \
@@ -8643,88 +8649,508 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
 
         shutil.move(pjoin(MG5DIR,'RunningCoupling'), pjoin(MG5DIR,'Template', 'Running'))
 
+    def get_customize_categories(self, model, reference_model):
+        """the list of the options proposed by customize_model for a given
+        model: the generic (model independent) ones and, on top of them, the
+        ones defined in the build_restrict.py of the model (if any).
+        model is the model without any restriction, reference_model is the
+        model as currently loaded (it only defines the default of the options)
+        """
+
+        categories = build_restrict_lib.get_generic_categories(model,
+                                                               reference_model)
+        # the (block, lhacode) already handled by the generic options
+        generic_target = set()
+        for category in categories:
+            for option in category:
+                generic_target.update(build_restrict_lib.get_rules_target(option))
+
+        model_path = model.get('modelpath')
+        if not os.path.exists(pjoin(model_path, 'build_restrict.py')):
+            return categories
+
+        ufo_model = ufomodels.load_model(model_path)
+        if not hasattr(ufo_model, 'build_restrict'):
+            return categories
+
+        externals = self.get_external_lhacode(model)
+        # the categories of the model are module level objects: without a copy
+        # the status set during a previous (possibly aborted) customize_model
+        # would be the starting point of this one
+        for category in copy.deepcopy(ufo_model.build_restrict.all_categories):
+            kept = build_restrict_lib.Category(category.name)
+            superseded, obsolete = [], []
+            for option in self.group_options(category):
+                target = set()
+                for rule in option:
+                    target.update(build_restrict_lib.get_rules_target(rule))
+                # An option of the model can target a parameter which is now
+                # handled by one of the generic options. Keeping both would let
+                # the user set contradictory values, so the model one is dropped.
+                if target & generic_target:
+                    superseded.append(option[0].name)
+                elif not (target & externals):
+                    # the parameters of that option are not in the model anymore
+                    obsolete.append(option[0].name)
+                else:
+                    kept += option
+            for message, options in [('superseded by the generic mass scheme options',
+                                      superseded),
+                                     ('not based on parameters of this model',
+                                      obsolete)]:
+                if options:
+                    logger.debug('customize_model: option(s) of the %s model '
+                                 'dropped (%s): %s', model.get('name'), message,
+                                 ', '.join(options))
+            if kept:
+                categories.append(kept)
+
+        return categories
+
+    @staticmethod
+    def group_options(category):
+        """a Category is a flat list of rules, the ones of a given option being
+        introduced by the rule with first=True. Return the list of options,
+        each of them being the list of its rules."""
+
+        options = []
+        for rule in category:
+            if rule.first or not options:
+                options.append([])
+            options[-1].append(rule)
+        return options
+
+    @staticmethod
+    def get_external_lhacode(model):
+        """the (lhablock, lhacode) of all the external parameters of a model"""
+
+        return set((param.lhablock.lower(), tuple(param.lhacode))
+                   for param in model['parameters'][('external',)])
+
+    @staticmethod
+    def randomize_param_card(param_card, externals):
+        """Replace the values of the card which are 0, 1 or identical to another
+        one by a random value: those values would otherwise be simplified by
+        the restriction machinery while the user did not ask for it.
+        0 and 1 are replaced by a random value in ]0,1[, a duplicated value v
+        by a random value in ]v,2v[ (the order of magnitude of a parameter is
+        physical: replacing MZ by 0.3 does break most of the models).
+        Two kind of parameters are left untouched: the zero widths (giving a
+        width to a particle which does not have one is not physical and changes
+        the model) and the technical parameters of the 'loop' block (MU_R, ...).
+        externals restricts this to the parameters which are really read from
+        the card (a param_card also contains informative entries)."""
+
+        used = set()
+        for block in param_card:
+            if block.startswith(('qnumbers', 'decay_table')) or 'info' in block:
+                continue
+            if block.lower() == 'loop':
+                continue
+            for param in param_card[block]:
+                if (block.lower(), tuple(param.lhacode)) not in externals:
+                    continue
+                try:
+                    value = float(param.value)
+                except (TypeError, ValueError):
+                    continue # 'auto' width and co.
+                if value == 0. and block.lower() == 'decay':
+                    continue
+                if value in (0., 1.) or abs(value) in used:
+                    while True:
+                        if value in (0., 1.):
+                            new_value = random.random()
+                        else:
+                            new_value = value * (1 + random.random())
+                        if new_value not in (0., 1.) and abs(new_value) not in used:
+                            break
+                    value = new_value
+                    param.value = value
+                used.add(abs(value))
+
+    @staticmethod
+    def resolve_identify(identify):
+        """'identify A B' followed by 'identify B C' means that A, B and C all
+        take the value of C. Applying the pairs in the order they were typed
+        would instead give A the value B had before it was itself re-pointed,
+        so each pair is first resolved to the root of its chain."""
+
+        link = dict(identify)
+        out = []
+        for target, source in identify:
+            root, seen = source, set([target])
+            while root in link and root not in seen:
+                seen.add(root)
+                root = link[root]
+            if root == target:
+                # a cycle ('identify A B' + 'identify B A'): any member of the
+                # cycle is a valid root, keep the one the user gave
+                root = source
+            out.append((target, root))
+        return out
+
+    @staticmethod
+    def apply_customize_rules(param_card, categories, set_zero, set_one,
+                                                                     identify):
+        """write in param_card the restrictions asked by the user.
+        categories are the (toggled) options of the question, set_zero/set_one
+        are lists of (lhablock, lhacode) and identify a list of
+        ((lhablock, lhacode), (lhablock, lhacode)) where the first parameter
+        is forced to the value of the second one."""
+
+        def get_param(lhablock, lhacode, loglevel=logging.WARNING):
+            try:
+                return param_card[lhablock.lower()].get(list(lhacode))
+            except (KeyError, IndexError):
+                logger.log(loglevel, '%s %s is not a parameter of this model. '
+                           'Corresponding restriction is ignored.',
+                           lhablock, list(lhacode))
+                return None
+
+        restricted = set()
+        for category in categories:
+            for option in category:
+                for (lhablock, lhacode, value) in option.get_rules():
+                    # an option of the model can be partially obsolete
+                    param = get_param(lhablock, lhacode, logging.DEBUG)
+                    if param is not None:
+                        param.value = value
+                        restricted.add((lhablock.lower(), tuple(lhacode)))
+
+        for value, entries in [(0., set_zero), (1., set_one)]:
+            for (lhablock, lhacode) in entries:
+                param = get_param(lhablock, lhacode)
+                if param is not None:
+                    param.value = value
+                    restricted.add((lhablock.lower(), tuple(lhacode)))
+
+        # done last so that 'identify A B' where B is itself restricted does
+        # propagate the restricted value to A
+        for (lhablock, lhacode), (lhablock2, lhacode2) in identify:
+            target = get_param(lhablock, lhacode)
+            source = get_param(lhablock2, lhacode2)
+            if target is not None and source is not None:
+                target.value = source.value
+                restricted.add((lhablock.lower(), tuple(lhacode)))
+
+        return restricted
+
+    @staticmethod
+    def get_restriction_signature(model):
+        """A summary of everything that the restriction of a model did remove
+        or merge. Two restrictions done with different (random) input values
+        have to return the same signature."""
+
+        # the flavour grouped couplings are named with a counter which is not
+        # reset between two imports: those names carry no information here
+        clean = lambda text: re.sub(r'\bFLV_\d+\b', 'FLV', str(text))
+
+        interactions = []
+        for vertex in model.get('interactions'):
+            interactions.append((
+                tuple(sorted(p.get('pdg_code') for p in vertex.get('particles'))),
+                tuple(sorted(str(lor) for lor in vertex.get('lorentz'))),
+                tuple(sorted(clean('%s:%s' % (key, value))
+                             for key, value in vertex.get('couplings').items()))))
+
+        couplings = [clean(coup.name) for value in model.get('couplings').values()
+                                                          for coup in value]
+        externals = ['%s %s' % (param.lhablock.lower(), list(param.lhacode))
+                     for param in model['parameters'][('external',)]]
+        particles = ['%s %s %s' % (p.get('pdg_code'), p.get('mass'), p.get('width'))
+                     for p in model.get('particles')]
+
+        return {'interactions': sorted(interactions),
+                'couplings': sorted(couplings),
+                'external parameters': sorted(externals),
+                'masses/widths': sorted(particles)}
+
+    def build_restricted_model(self, model_path, param_card, externals,
+                                categories, set_zero, set_one, identify):
+        """apply one full restriction of the model. The input values which
+        would be simplified by accident are randomized first.
+        return the restricted model, the associated restriction card and the
+        set of the (lhablock, lhacode) really restricted."""
+
+        restrict_card = check_param_card.ParamCard(param_card)
+        self.randomize_param_card(restrict_card, externals)
+        restricted = self.apply_customize_rules(restrict_card, categories,
+                                                set_zero, set_one, identify)
+
+        # the restriction is applied by import_model (and not directly by
+        # RestrictModel) so that the model is the very same -flavour grouping
+        # included- as the one obtained by 'import model NAME-restriction'
+        tmp_dir = tempfile.mkdtemp()
+        try:
+            restrict_path = pjoin(tmp_dir, 'restrict_customize.dat')
+            restrict_card.write(restrict_path)
+            model = import_ufo.import_model(model_path, restrict=restrict_path)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+        return model, restrict_card, restricted
+
+    def get_default_param_card(self, model, default_card, restricted,
+                                                               identify=()):
+        """the param_card of the (restricted) model where all the parameters
+        which were not restricted by the user are set back to the default value
+        of the model."""
+
+        out_path = io.StringIO()
+        param_writer.ParamCardWriter(model, out_path)
+        param_card = check_param_card.ParamCard(out_path.getvalue().split('\n'))
+
+        for block in param_card:
+            if block.startswith(('qnumbers', 'decay_table')) or 'info' in block:
+                continue
+            for param in param_card[block]:
+                if (block.lower(), tuple(param.lhacode)) in restricted:
+                    continue # the user asked for that value: keep it
+                value = default_card.get_value(block, tuple(param.lhacode),
+                                               default='__not_found__')
+                if value != '__not_found__':
+                    param.value = value
+
+        # a parameter identified to another one has to follow it, including
+        # when the value of that one was restored above
+        for (lhablock, lhacode), (lhablock2, lhacode2) in identify:
+            try:
+                target = param_card[lhablock.lower()].get(list(lhacode))
+                source = param_card[lhablock2.lower()].get(list(lhacode2))
+            except (KeyError, IndexError):
+                continue # merged by the restriction (or removed from the model)
+            target.value = source.value
+
+        return param_card
+
     def do_customize_model(self, line):
         """create a restriction card in a interactive way"""
 
         args = self.split_arg(line)
         self.check_customize_model(args)
 
+        name = args[0].split('=', 1)[1] if args else None
         model_path = self._curr_model.get('modelpath')
-        if not os.path.exists(pjoin(model_path,'build_restrict.py')):
-            raise self.InvalidCmd('''Model not compatible with this option.''')
+        # the model as currently loaded: only used to know which of the generic
+        # options are already applied (it defines their default value)
+        reference_model = self._curr_model
+
+        try:
+            self.customize_model(model_path, reference_model, name)
+        except Exception:
+            # do not leave the interface with the unrestricted model
+            self._curr_model = reference_model
+            raise
+
+    def customize_model(self, model_path, reference_model, name):
+        """the body of do_customize_model. model_path is the model to
+        customize, reference_model the model as currently loaded and name the
+        name of the restriction to save (None to only modify the model in
+        memory)."""
 
         # (re)import the full model (get rid of the default restriction)
         self._curr_model = import_ufo.import_model(model_path, restrict=False)
+        categories = self.get_customize_categories(self._curr_model,
+                                                   reference_model)
 
-        #1) create the full param_card
+        ask_instance = self.ask('', '0', [], ask_class=AskforCustomize,
+                                categories=categories, return_instance=True)[1]
+
+        set_zero = ask_instance.set_zero
+        set_one = ask_instance.set_one
+        identify = self.resolve_identify(ask_instance.identify)
+        new_formula = ask_instance.new_formula
+        new_coupling = ask_instance.new_coupling
+
+        if new_formula or new_coupling:
+            # changing a formula can not be done via a restriction card:
+            # a new UFO model has to be written on disk
+            if name:
+                raise self.InvalidCmd(
+                    'Modifying a formula is not compatible with the --save option.\n'
+                    '  Run \'customize_model\' without --save: you will be asked for\n'
+                    '  the name of the new model to create.')
+            old_externals = self.get_external_lhacode(self._curr_model)
+            model_path = self.create_customized_ufo(model_path, new_formula,
+                                                                  new_coupling)
+            self._curr_model = import_ufo.import_model(model_path, restrict=False)
+            self.warn_rules_lost_by_formula(categories,
+                    old_externals - self.get_external_lhacode(self._curr_model))
+
+        # the values of the model, used to restore the non restricted parameters
         out_path = io.StringIO()
         param_writer.ParamCardWriter(self._curr_model, out_path)
-        # and load it to a python object
-        param_card = check_param_card.ParamCard(out_path.getvalue().split('\n'))
-
-
-        all_categories = self.ask('','0',[], ask_class=AskforCustomize)
-        put_to_one = []
-        ## Make a Temaplate for  the restriction card. (card with no restrict)
-        for block in param_card:
-            value_dict = {}
-            for param in param_card[block]:
-                value = param.value
-                if value == 0:
-                    param.value = 0.000001e-99
-                elif value == 1:
-                    if block != 'qnumbers':
-                        put_to_one.append((block,param.lhacode))
-                        param.value = random.random()
-                elif abs(value) in value_dict:
-                    param.value += value_dict[abs(value)] * 1e-4 * param.value
-                    value_dict[abs(value)] += 1
-                else:
-                    value_dict[abs(value)] = 1
-
-        for category in all_categories:
-            for options in category:
-                if not options.status:
-                    continue
-                param = param_card[options.lhablock].get(options.lhaid)
-                param.value = options.value
+        default_card = check_param_card.ParamCard(out_path.getvalue().split('\n'))
 
         logger.info('Loading the resulting model')
-        # Applying the restriction
-        self._curr_model = import_ufo.RestrictModel(self._curr_model)
-        model_name = self._curr_model.get('name')
-        if model_name == 'mssm':
-            keep_external=True
-        else:
-            keep_external=False
-        self._curr_model.restrict_model(param_card,keep_external=keep_external)
+        externals = self.get_external_lhacode(self._curr_model)
+        model, restrict_card, restricted = self.build_restricted_model(
+            model_path, default_card, externals, categories, set_zero, set_one,
+            identify)
 
-        if args:
-            name = args[0].split('=',1)[1]
-            path = pjoin(model_path,'restrict_%s.dat' % name)
+        if name:
+            # The restriction is driven by the value of the parameters, so a
+            # (un)lucky set of random values could remove more -or less- than
+            # what the user asked for. Redo it with another set of values and
+            # check that we do end up with the very same model.
+            logger.info('Checking the stability of the restriction')
+            check_model = self.build_restricted_model(model_path, default_card,
+                        externals, categories, set_zero, set_one, identify)[0]
+            signature = self.get_restriction_signature(model)
+            check_signature = self.get_restriction_signature(check_model)
+            diff = [key for key, value in signature.items()
+                    if value != check_signature[key]]
+            if diff and madgraph.ADMIN_DEBUG:
+                for key in diff:
+                    only1 = [v for v in signature[key] if v not in check_signature[key]]
+                    only2 = [v for v in check_signature[key] if v not in signature[key]]
+                    misc.sprint(key, 'only in run1:', only1[:5])
+                    misc.sprint(key, 'only in run2:', only2[:5])
+            if diff:
+                logger.warning('Two restrictions of the model done with different '
+                    'input values do not lead to the same model.\n'
+                    '  Difference(s) found for: %s\n'
+                    '  This typically means that the model has (hidden) relations '
+                    'between its parameters.\n'
+                    '  The restriction is therefore NOT applied.', ', '.join(diff))
+                raise self.InvalidCmd('customize_model can not be applied to this model.')
+
+        self._curr_model = model
+        # restore the default value of everything the user did not restrict
+        param_card = self.get_default_param_card(model, default_card, restricted,
+                                                 identify)
+        self._curr_model.set_parameters_and_couplings(param_card)
+        # rewrite it so that the informative entries (dependent parameters) of
+        # the card are the ones of the model with its default values
+        out_path = io.StringIO()
+        param_writer.ParamCardWriter(self._curr_model, out_path)
+        param_card = check_param_card.ParamCard(out_path.getvalue().split('\n'))
+        self.process_model()
+
+        if name:
+            path = pjoin(model_path, 'restrict_%s.dat' % name)
             logger.info('Save restriction file as %s' % path)
+            restrict_card.write(path)
+            path = pjoin(model_path, 'param_%s.dat' % name)
+            logger.info('Save default card file as %s' % path)
             param_card.write(path)
             self._curr_model['name'] += '-%s' % name
 
-        # if some need to put on one
-        if put_to_one:
-            out_path = io.StringIO()
-            param_writer.ParamCardWriter(self._curr_model, out_path)
-            # and load it to a python object
-            param_card = check_param_card.ParamCard(out_path.getvalue().split('\n'))
-            
-            for (block, lhacode) in put_to_one:
-                try:
-                    param_card[block].get(lhacode).value = 1
-                except:
-                    pass # was removed of the model!
-            self._curr_model.set_parameters_and_couplings(param_card)
+    @staticmethod
+    def warn_rules_lost_by_formula(categories, lost):
+        """A 'formula' command turns an external parameter into an internal
+        one, so a restriction pointing at that parameter can not be written in
+        the param_card anymore. Those are silently skipped when the card is
+        filled, so say here which options are concerned."""
 
-            if args:
-                name = args[0].split('=',1)[1]
-                path = pjoin(model_path,'paramcard_%s.dat' % name)
-                logger.info('Save default card file as %s' % path)
-                param_card.write(path)
+        if not lost:
+            return
+        affected = set()
+        for category in categories:
+            for option in category:
+                target = set((lhablock.lower(), tuple(lhacode))
+                             for lhablock, lhacode, value in option.get_rules())
+                if target & lost:
+                    affected.add(option.name)
+        if affected:
+            logger.warning('The following option(s) can not be fully applied '
+                'anymore: %s.\n  A \'formula\' command turned one of the '
+                'parameters they act on into an internal parameter of the new '
+                'model, so that parameter is not in the param_card anymore and '
+                'the corresponding restriction is dropped.',
+                ', '.join(sorted(affected)))
+
+    def create_customized_ufo(self, model_path, new_formula, new_coupling,
+                                                                    name=None):
+        """write on disk a new UFO model where the formula of some parameters
+        and/or couplings are the one asked by the user. Return the path of the
+        new model."""
+
+        import models.usermod as usermod
+
+        if not name:
+            default = '%s_customized' % os.path.basename(model_path.rstrip('/'))
+            name = self.ask('Please enter the name of the new model', default,
+                                                  ask_class=AskforModelName)
+            name = str(name).strip()
+        if not AskforModelName.name_pattern.match(name):
+            raise self.InvalidCmd('\'%s\' is not a valid model name '
+                '(letters, digits and underscores only).' % name)
+
+        output_dir = pjoin(MG5DIR, 'models', name)
+        if os.path.exists(output_dir):
+            answer = self.ask('Model %s already exists. Overwrite it?' % name,
+                              'n', ['y', 'n'])
+            if answer != 'y':
+                raise self.InvalidCmd('Model %s already exists.' % name)
+            shutil.rmtree(output_dir)
+
+        try:
+            base_model = copy.deepcopy(usermod.UFOModel(model_path))
+        except Exception:
+            base_model_tmp = usermod.UFOModel(model_path)
+            with misc.TMP_variable(base_model_tmp, 'model', None):
+                base_model = copy.deepcopy(base_model_tmp)
+            base_model.model = base_model_tmp.model
+            del base_model_tmp
+
+        # the external parameters which become internal have to be removed from
+        # the restriction cards shipped with the original model
+        removed = []
+        for param_name, expr in new_formula:
+            for param in base_model.parameters:
+                if param.name != param_name:
+                    continue
+                logger.info('%s is now an internal parameter: %s = %s',
+                            param.name, param.name, expr)
+                removed.append((param.lhablock.lower(), tuple(param.lhacode)))
+                param.nature = 'internal'
+                param.value = expr
+                del param.lhablock
+                del param.lhacode
+                break
+            else:
+                raise self.InvalidCmd('%s is not a parameter of the model' % param_name)
+
+        for coupling_name, expr in new_coupling:
+            for coupling in base_model.couplings:
+                if coupling.name != coupling_name:
+                    continue
+                logger.info('%s is redefined as: %s', coupling.name, expr)
+                coupling.value = expr
+                break
+            else:
+                raise self.InvalidCmd('%s is not a coupling of the model' % coupling_name)
+
+        base_model.write(output_dir)
+
+        # optional files of the UFO which write() does not propagate but which
+        # are needed for the new model to behave like the original one
+        for filename in ['build_restrict.py', 'running.py', 'decays.py', 'README']:
+            if os.path.exists(pjoin(model_path, filename)):
+                files.cp(pjoin(model_path, filename), output_dir)
+
+        # write() only propagates the restrict_XXX.dat, but the associated
+        # param_XXX.dat (default values) has to follow them
+        for card in os.listdir(model_path):
+            if card.startswith('param_') and card.endswith('.dat') and \
+                   os.path.exists(pjoin(model_path, card.replace('param_', 'restrict_', 1))):
+                files.cp(pjoin(model_path, card), output_dir)
+
+        if removed:
+            for card in os.listdir(output_dir):
+                if not card.startswith(('restrict_', 'param_')) or \
+                                                    not card.endswith('.dat'):
+                    continue
+                param_card = check_param_card.ParamCard(pjoin(output_dir, card))
+                for lhablock, lhacode in removed:
+                    if param_card.has_param(lhablock, list(lhacode)):
+                        param_card.remove_param(lhablock, list(lhacode))
+                # same precision as usermod uses for those cards
+                param_card.write(pjoin(output_dir, card), precision=7)
+
+        logger.info('New model created in %s', output_dir)
+        return output_dir
 
     def do_save(self, line, check=True, to_keep={}, log=True):
         """Not in help: Save information to file"""
@@ -11577,6 +12003,22 @@ _launch_parser.add_option("", "--nb_run", default=1, type='int',
 #===============================================================================
 # Interface for customize question.
 #===============================================================================
+class AskforModelName(cmd.SmartQuestion):
+    """Ask for a (free text) model name. The only reason for this class to
+    exist is that a question with no pre-defined answer is otherwise not
+    scriptable (any line of the script would be refused)."""
+
+    name_pattern = re.compile(r'^\w+$')
+
+    def special_check_answer_in_input_file(self, line, default):
+        # only accept something which can be a model name: a script which does
+        # not answer this question must not have its next command swallowed
+        line = line.strip()
+        if self.name_pattern.match(line):
+            return line
+        return None
+
+
 class AskforCustomize(cmd.SmartQuestion):
     """A class for asking a question where in addition you can have the
     set command define and modifying the param_card/run_card correctly"""
@@ -11584,10 +12026,37 @@ class AskforCustomize(cmd.SmartQuestion):
     def __init__(self, question, allow_arg=[], default=None,
                                             mother_interface=None, *arg, **opt):
 
-        model_path = mother_interface._curr_model.get('modelpath')
-        #2) Import the option available in the model
+        categories = opt.pop('categories', None)
+
+        model = mother_interface._curr_model
+        model_path = model.get('modelpath')
+        # the UFO objects are used (and not the MG5 ones) since the user knows
+        # the model under that form (no 'mdl_' prefix, ...)
         ufo_model = ufomodels.load_model(model_path)
-        self.all_categories = ufo_model.build_restrict.all_categories
+        #2) Import the option available in the model
+        if categories is None:
+            categories = ufo_model.build_restrict.all_categories
+        self.all_categories = categories
+
+        self.external_params = dict((param.name.lower(), param)
+                                    for param in ufo_model.all_parameters
+                                    if param.nature == 'external')
+        self.internal_params = dict((param.name.lower(), param)
+                                    for param in ufo_model.all_parameters
+                                    if param.nature != 'external')
+        self.ufo_couplings = dict((coupling.name.lower(), coupling)
+                                  for coupling in ufo_model.all_couplings)
+        # (lhablock, lhacode) -> name, to display a parameter as the user knows it
+        self.lha2name = dict(((param.lhablock, tuple(param.lhacode)), param.name)
+                             for param in self.external_params.values())
+
+        # the customizations which are not a simple on/off switch
+        self.set_zero = []    # [(lhablock, lhacode)]
+        self.set_one = []     # [(lhablock, lhacode)]
+        self.identify = []    # [((lhablock, lhacode), (lhablock, lhacode))]
+        self.new_formula = [] # [(parameter name, expression)]
+        self.new_coupling = []# [(coupling name, expression)]
+        self.formula_target = {} # parameter name -> (lhablock, lhacode)
 
         question = self.get_question()
         # determine the possible value and how they are linked to the restriction
@@ -11605,7 +12074,12 @@ class AskforCustomize(cmd.SmartQuestion):
 
         cmd.SmartQuestion.__init__(self, question, allow_arg, default, mother_interface)
 
-
+    @property
+    def answer(self):
+        """what do_customize_model gets back from ask(). The value returned by
+        cmdloop() in interactive mode, so that a scripted answer (which does
+        not go through cmdloop) returns the very same object."""
+        return self.all_categories
 
     def default(self, line):
         """Default action if line is not recognized"""
@@ -11614,13 +12088,16 @@ class AskforCustomize(cmd.SmartQuestion):
         args = line.split()
         if line == '' and self.default_value is not None:
             self.value = self.default_value
-        # check if input is a file
-        elif hasattr(self, 'do_%s' % args[0]):
-            self.do_set(' '.join(args[1:]))
+        # check if input is a command
+        elif args and hasattr(self, 'do_%s' % args[0]):
+            getattr(self, 'do_%s' % args[0])(' '.join(args[1:]))
         elif line.strip() != '0' and line.strip() != 'done' and \
             str(line) != 'EOF' and line.strip() in self.allow_arg:
             option = self.name2options[line.strip()]
-            option.status = not option.status
+            if isinstance(option, build_restrict_lib.ChoiceOption):
+                option.next_status()
+            else:
+                option.status = not option.status
             self.value = 'repeat'
         else:
             self.value = line
@@ -11638,6 +12115,9 @@ class AskforCustomize(cmd.SmartQuestion):
         self.value = 'repeat'
 
         args = line.split()
+        if not args:
+            logger.warning('Invalid set command. Syntax is: set NAME VALUE')
+            return
         if args[0] not in self.name2options:
             logger.warning('Invalid set command. %s not recognize options. Valid options are: \n  %s' %
                            (args[0], ', '.join(list(self.name2options.keys())) ))
@@ -11646,32 +12126,220 @@ class AskforCustomize(cmd.SmartQuestion):
             logger.warning('Invalid set command. Not correct number of argument')
             return
 
+        option = self.name2options[args[0]]
+        if isinstance(option, build_restrict_lib.ChoiceOption):
+            try:
+                option.set_status(args[1])
+            except ValueError as error:
+                logger.warning(str(error))
+            return
 
         if args[1] in ['True','1','.true.','T',1,True,'true','TRUE']:
-            self.name2options[args[0]].status = True
+            option.status = True
         elif args[1] in ['False','0','.false.','F',0,False,'false','FALSE']:
-            self.name2options[args[0]].status = False
+            option.status = False
         else:
             logger.warning('%s is not True/False. Didn\'t do anything.' % args[1])
 
+    #===========================================================================
+    # customization of a single parameter/coupling
+    #===========================================================================
+    def get_external_parameter(self, name):
+        """return the (lhablock, lhacode) of an external parameter of the model
+        (None if the parameter is not a valid external parameter)"""
 
+        param = self.external_params.get(name.lower(), None)
+        if param is None:
+            if name.lower() in self.internal_params:
+                logger.warning('%s is an internal parameter of the model. Only '
+                    'external parameters (i.e. parameters of the param_card) '
+                    'can be restricted.', name)
+            else:
+                logger.warning('%s is not a parameter of this model.', name)
+            return None
+        return (param.lhablock, tuple(param.lhacode))
+
+    def do_set_zero(self, line):
+        """set an external parameter of the model to zero"""
+
+        self.value = 'repeat'
+        args = line.split()
+        if len(args) != 1:
+            logger.warning('Invalid set_zero command. Syntax is: set_zero NAME')
+            return
+        param = self.get_external_parameter(args[0])
+        if param is None:
+            return
+        self.forget_parameter(param)
+        self.set_zero.append(param)
+
+    def do_set_one(self, line):
+        """set an external parameter of the model to one"""
+
+        self.value = 'repeat'
+        args = line.split()
+        if len(args) != 1:
+            logger.warning('Invalid set_one command. Syntax is: set_one NAME')
+            return
+        param = self.get_external_parameter(args[0])
+        if param is None:
+            return
+        self.forget_parameter(param)
+        self.set_one.append(param)
+
+    def do_identify(self, line):
+        """force an external parameter to take the value of another one"""
+
+        self.value = 'repeat'
+        args = line.split()
+        if len(args) != 2:
+            logger.warning('Invalid identify command. Syntax is: identify NAME1 NAME2')
+            return
+        param = self.get_external_parameter(args[0])
+        param2 = self.get_external_parameter(args[1])
+        if param is None or param2 is None:
+            return
+        if param == param2:
+            logger.warning('Can not identify a parameter to itself.')
+            return
+        if param[0].lower() != param2[0].lower():
+            # the model restriction only merges two parameters of a same block:
+            # both will stay in the param_card (with the same value)
+            logger.warning('%s and %s are in two different blocks of the '
+                'param_card (%s and %s): the interactions will be simplified as '
+                'if they were identical but both will remain independent '
+                'entries of the param_card (you will have to keep them equal).\n'
+                '  Use \'formula %s = %s\' to link them for good (this writes a '
+                'new model on disk).', args[0], args[1], param[0], param2[0],
+                args[0], args[1])
+        self.forget_parameter(param)
+        self.identify.append((param, param2))
+
+    def do_formula(self, line):
+        """define an external parameter as a formula of other parameters.
+        This requires to write a new UFO model on disk."""
+
+        self.value = 'repeat'
+        if '=' not in line:
+            logger.warning('Invalid formula command. Syntax is: formula NAME = EXPRESSION')
+            return
+        name, expr = line.split('=', 1)
+        name, expr = name.strip(), expr.strip()
+        if name.lower() not in self.external_params:
+            logger.warning('%s is not an external parameter of this model.', name)
+            return
+        if not expr:
+            logger.warning('Invalid formula command: empty expression.')
+            return
+        for variable in self.get_variables(expr):
+            if variable == name.lower():
+                logger.warning('%s can not be defined in term of itself.', name)
+                return
+            if variable not in self.external_params:
+                logger.warning('%s is not an external parameter of this model. '
+                    'Such formula is likely to fail when loading the model.', variable)
+        param = self.get_external_parameter(name)
+        name = self.external_params[name.lower()].name
+        self.forget_parameter(param)
+        self.new_formula = [(n, e) for (n, e) in self.new_formula if n != name]
+        self.formula_target[name] = param
+        self.new_formula.append((name, expr))
+
+    def do_coupling(self, line):
+        """change the definition of one of the coupling of the model.
+        This requires to write a new UFO model on disk."""
+
+        self.value = 'repeat'
+        if '=' not in line:
+            logger.warning('Invalid coupling command. Syntax is: coupling NAME = EXPRESSION')
+            return
+        name, expr = line.split('=', 1)
+        name, expr = name.strip(), expr.strip()
+        if name.lower() not in self.ufo_couplings:
+            logger.warning('%s is not a coupling of this model.', name)
+            return
+        if not expr:
+            logger.warning('Invalid coupling command: empty expression.')
+            return
+        name = self.ufo_couplings[name.lower()].name
+        self.new_coupling = [(n, e) for (n, e) in self.new_coupling if n != name]
+        self.new_coupling.append((name, expr))
+
+    @staticmethod
+    def get_variables(expr):
+        """the (lower case) name of all the variables used in an expression"""
+
+        known = set(['cmath', 'math', 'abs', 'complex', 'complexconjugate',
+                     're', 'im', 'sqrt', 'pi', 'exp', 'log', 'sin', 'cos',
+                     'tan', 'asin', 'acos', 'atan', 'sec', 'csc', 'cot'])
+        out = []
+        for variable in re.findall(r'\b[A-Za-z_]\w*\b', expr):
+            if variable.lower() in known or variable.lower() in out:
+                continue
+            out.append(variable.lower())
+        return out
+
+    def forget_parameter(self, param):
+        """remove any previous customization of a given parameter"""
+
+        if param is None:
+            return
+        self.set_zero = [p for p in self.set_zero if p != param]
+        self.set_one = [p for p in self.set_one if p != param]
+        self.identify = [(p, p2) for (p, p2) in self.identify if p != param]
+        self.new_formula = [(n, e) for (n, e) in self.new_formula
+                            if self.formula_target.get(n, None) != param]
+
+    def do_clear(self, line):
+        """forget all the parameter/coupling modifications entered so far"""
+
+        self.value = 'repeat'
+        self.set_zero = []
+        self.set_one = []
+        self.identify = []
+        self.new_formula = []
+        self.new_coupling = []
+        self.formula_target = {}
 
     def get_question(self):
         """define the current question."""
+
         question = ''
-        i=0
+        i = 0
         for category in self.all_categories:
             question += category.name + ':\n'
             for options in category:
                 if not options.first:
                     continue
-                i+=1
+                i += 1
                 question += '    %s: %s [%s]\n' % (i, options.name,
                                 options.display(options.status))
-            question += 'Enter a number to change it\'s status or press enter to validate.\n'
-            question += 'For scripting this function, please type: \'help\''
-        return question
+                if isinstance(options, build_restrict_lib.ChoiceOption):
+                    question += '        possible values: %s%s\n' % (
+                        ', '.join(options.labels),
+                        ' (%s)' % options.description if options.description else '')
+        question += 'Enter a number to change it\'s status or press enter to validate.\n'
 
+        fmt = lambda key: '%s (%s %s)' % (self.lha2name.get(key, '?'),
+                                          key[0], list(key[1]))
+        current = []
+        for param in self.set_zero:
+            current.append('    %s = 0' % fmt(param))
+        for param in self.set_one:
+            current.append('    %s = 1' % fmt(param))
+        for param, param2 in self.identify:
+            current.append('    %s = %s' % (fmt(param), fmt(param2)))
+        for name, expr in self.new_formula:
+            current.append('    %s = %s' % (name, expr))
+        for name, expr in self.new_coupling:
+            current.append('    %s = %s' % (name, expr))
+        if current:
+            question += 'parameter/coupling modifications:\n'
+            question += '\n'.join(current) + '\n'
+
+        question += 'For more options (setting a parameter to zero/one/..., changing a formula),\n'
+        question += 'or for scripting this function, please type: \'help\''
+        return question
 
     def complete_set(self, text, line, begidx, endidx):
         """ Complete the set command"""
@@ -11682,8 +12350,26 @@ class AskforCustomize(cmd.SmartQuestion):
             possibilities = [x for x in self.name2options if not x.isdigit()]
             return self.list_completion(text, possibilities, line)
         else:
+            option = self.name2options.get(args[1], None)
+            if isinstance(option, build_restrict_lib.ChoiceOption):
+                return self.list_completion(text, option.labels, line)
             return self.list_completion(text,['True', 'False'], line)
 
+    def complete_set_zero(self, text, line, begidx, endidx):
+        """ Complete the set_zero command"""
+        signal.alarm(0) # avoid timer if any
+        return self.list_completion(text,
+                  [param.name for param in self.external_params.values()], line)
+
+    complete_set_one = complete_set_zero
+    complete_identify = complete_set_zero
+    complete_formula = complete_set_zero
+
+    def complete_coupling(self, text, line, begidx, endidx):
+        """ Complete the coupling command"""
+        signal.alarm(0) # avoid timer if any
+        return self.list_completion(text,
+                  [coup.name for coup in self.ufo_couplings.values()], line)
 
     def do_help(self, line):
         '''help message'''
@@ -11696,19 +12382,33 @@ class AskforCustomize(cmd.SmartQuestion):
         print('function \'set\'. This function takes two argument:')
         print('set NAME VALUE')
         print('   NAME is the description of the option where you remove all spaces')
-        print('   VALUE is either True or False')
+        print('   VALUE is either True/False or, for the options with more than')
+        print('         two values, one of the value proposed within the bracket')
         print(' Example: For the question')
         print('''     sm customization:
         1: diagonal ckm [True]
-        2: c mass = 0 [True]
-        3: b mass = 0 [False]
-        4: tau mass = 0 [False]
-        5: muon mass = 0 [True]
-        6: electron mass = 0 [True]
+     mass scheme:
+        2: flavour scheme [4F]
+        3: nb of massive leptons [1]
     Enter a number to change it's status or press enter to validate.''')
         print(''' you can answer by''')
         print('   set diagonalckm False')
-        print('   set taumass=0 True')
+        print('   set flavourscheme 5F')
+        print('   set nbofmassiveleptons 0')
+        print('')
+        print('On top of those options, the following commands are available:')
+        print('   set_zero NAME          : set the external parameter NAME to zero')
+        print('   set_one NAME           : set the external parameter NAME to one')
+        print('   identify NAME1 NAME2   : force NAME1 to take the value of NAME2')
+        print('   clear                  : forget all those modifications')
+        print('')
+        print('The two following commands change a formula of the model. They can')
+        print('not be stored in a restriction card, so a new UFO model is written')
+        print('on disk (you will be asked for its name). They are therefore not')
+        print('compatible with the --save=NAME option.')
+        print('   formula NAME = EXPRESSION   : NAME (an external parameter) becomes')
+        print('                                 an internal parameter of the model')
+        print('   coupling NAME = EXPRESSION  : change the definition of a coupling')
 
     def cmdloop(self, intro=None):
         cmd.SmartQuestion.cmdloop(self, intro)
