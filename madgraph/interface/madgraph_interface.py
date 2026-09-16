@@ -8836,6 +8836,11 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
 
         kept = self.get_external_lhacode(reference_model)
         loaded = self.get_full_param_card(reference_model)
+        # an SLHA2 restriction keeps the parameters it fixed in the param_card,
+        # so 'not external anymore' does not catch them: the ones sitting at
+        # zero/one, or sharing the value of another one, were fixed as well
+        dropped, merged = self.get_parameter_classes(loaded, kept)
+        fixed = dropped | merged
 
         recovered = []
         for block in default_card:
@@ -8845,7 +8850,7 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
                 key = (block.lower(), tuple(param.lhacode))
                 if key not in externals:
                     continue # an informative entry, not a parameter
-                if key not in kept:
+                if key not in kept or key in fixed:
                     recovered.append(key) # fixed at load time: keep the UFO one
                     continue
                 value = loaded.get_value(block, tuple(param.lhacode),
@@ -8885,20 +8890,31 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
         return param_card
 
     def warn_recovered_defaults(self, recovered, restricted, param_card,
-                                                        model_path, reference):
+                                        model_path, reference, ask_instance):
         """say which parameters could not take the value of the model as it was
         loaded, because the restriction it came with had fixed them"""
 
+        # the ones the user gave a value to did not fall back on anything
+        given = set((lhablock.lower(), lhacode)
+                    for lhablock, lhacode in ask_instance.default_values)
+        source = ask_instance.default_card_values
+        if source is not None:
+            given.update(key for key in recovered
+                         if source.get_value(key[0], key[1],
+                                             default='__not_set__') != '__not_set__')
+
         lha2name = self.get_lha2name(model_path)
-        back = [key for key in recovered if key not in restricted
+        back = [key for key in recovered
+                if key not in restricted and key not in given
                 and param_card.has_param(key[0], list(key[1]))]
         if not back:
             return
         them = 'it' if len(back) == 1 else 'them'
+        # an SLHA2 restriction fixes dozens of them, so the list is truncated
         logger.warning('%s: value taken from the UFO model, since %s had fixed '
             '%s and the model you loaded therefore carries no value for %s. '
             '\'set default\' can give another one.',
-            ', '.join(sorted(self.name_of_lha(lha2name, key) for key in back)),
+            self.short_list([self.name_of_lha(lha2name, key) for key in back]),
             reference, them, them)
 
     @staticmethod
@@ -9571,6 +9587,10 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
             self._curr_model = import_ufo.import_model(model_path, restrict=False)
             self.warn_rules_lost_by_formula(categories,
                     old_externals - self.get_external_lhacode(self._curr_model))
+            # the parameters changed, so the values they start from have to be
+            # read again from the model which is now used
+            baseline, recovered = self.get_loaded_default_card(self._curr_model,
+                    reference_model, self.get_external_lhacode(self._curr_model))
 
         # the values of the model, used to restore the non restricted
         # parameters, with what 'set default' asked for on top of them
@@ -9640,7 +9660,8 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
         param_card = self.get_full_param_card(self._curr_model)
         if ask_instance.default_source != 'ufo':
             self.warn_recovered_defaults(recovered, restricted, param_card,
-                            model_path, self.get_reference_name(reference_model))
+                            model_path, self.get_reference_name(reference_model),
+                            ask_instance)
         self.process_model()
 
         if name:

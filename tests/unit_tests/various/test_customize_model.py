@@ -1506,3 +1506,58 @@ class TestBlockAssignment(unittest.TestCase):
         self.assertTrue('ymb' in out)
         self.assertEqual(self.ask.complete_set_zero('', 'set_zero yukawa ',
                                                     16, 16), ['all'])
+
+
+#===============================================================================
+# which parameters can not take the value of the model which was loaded
+#===============================================================================
+class TestRecoveredDefaults(unittest.TestCase):
+    """A parameter the loaded restriction had fixed has no value to propagate,
+    whether that restriction removed it from the param_card or -- SLHA2 -- kept
+    it in there."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.sm_path = import_ufo.find_ufo_path('sm')
+        cls.full_model = import_ufo.import_full_model(cls.sm_path)
+
+    def setUp(self):
+        self.cmd = mg_interface.MadGraphCmd()
+        self.externals = self.cmd.get_external_lhacode(self.full_model)
+
+    def test_a_kept_but_fixed_parameter(self):
+        """an SLHA2 restriction keeps what it fixed in the param_card, so
+        'not external anymore' does not catch it"""
+
+        reference = import_ufo.import_model(self.sm_path + '-ckm')
+        # pretend the restriction had kept MZ at one, as an SLHA2 one would
+        kept = self.cmd.get_external_lhacode(reference)
+        self.assertTrue(('mass', (23,)) in kept)
+        loaded = self.cmd.get_full_param_card(reference)
+        loaded['mass'].get([23]).value = 1.
+
+        dropped, merged = self.cmd.get_parameter_classes(loaded, kept)
+        self.assertTrue(('mass', (23,)) in dropped)
+
+    def test_the_warning_skips_what_set_default_gave(self):
+        """a parameter the user gave a value to did not fall back on the UFO"""
+
+        class FakeAsk(object):
+            default_values = {('DECAY', (15,)): 1e-12}
+            default_card_values = None
+
+        param_card = self.cmd.get_full_param_card(self.full_model)
+        recovered = [('decay', (15,)), ('mass', (4,))]
+        # nothing raises, and only the one which was not given is reported
+        self.cmd.warn_recovered_defaults(recovered, set(), param_card,
+                    self.sm_path, 'restrict_ckm.dat', FakeAsk())
+
+    def test_the_warning_skips_what_the_card_defines(self):
+        class FakeAsk(object):
+            default_values = {}
+        FakeAsk.default_card_values = check_param_card.ParamCard(
+                    os.path.join(self.sm_path, 'restrict_ckm.dat'))
+
+        param_card = self.cmd.get_full_param_card(self.full_model)
+        self.cmd.warn_recovered_defaults([('decay', (15,))], set(), param_card,
+                    self.sm_path, 'restrict_ckm.dat', FakeAsk())
