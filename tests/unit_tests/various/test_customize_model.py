@@ -213,7 +213,7 @@ class TestCustomizeCard(unittest.TestCase):
 
         restricted = self.cmd.apply_customize_rules(self.card, [category],
                     set_zero=[('mass', (4,))], set_one=[('sminputs', (3,))],
-                    identify=[(('yukawa', (6,)), ('mass', (6,)))])
+                    set_equal=[(('yukawa', (6,)), ('mass', (6,)))])
 
         self.assertEqual(self.card['mass'].get([5]).value, 0.)
         self.assertEqual(self.card['yukawa'].get([5]).value, 0.)
@@ -225,33 +225,33 @@ class TestCustomizeCard(unittest.TestCase):
                          set([('mass', (5,)), ('yukawa', (5,)), ('mass', (4,)),
                               ('sminputs', (3,)), ('yukawa', (6,))]))
 
-    def test_identify_chain_is_resolved(self):
-        """'identify A B' + 'identify B C' has to make the three of them equal,
+    def test_set_equal_chain_is_resolved(self):
+        """'set_equal A B' + 'set_equal B C' has to make the three of them equal,
         whatever the order they were entered in."""
 
         A, B, C = ('mass', (4,)), ('mass', (5,)), ('mass', (6,))
         for chain in ([(A, B), (B, C)], [(B, C), (A, B)]):
             card = check_param_card.ParamCard(self.text.split('\n'))
-            identify = mg_interface.MadGraphCmd.resolve_identify(chain)
-            self.cmd.apply_customize_rules(card, [], [], [], identify)
+            set_equal = mg_interface.MadGraphCmd.resolve_set_equal(chain)
+            self.cmd.apply_customize_rules(card, [], [], [], set_equal)
             values = [card['mass'].get([pdg]).value for pdg in (4, 5, 6)]
             self.assertEqual(values[0], values[2])
             self.assertEqual(values[1], values[2])
 
-    def test_identify_cycle_does_not_loop(self):
-        """'identify A B' + 'identify B A' is degenerate but must terminate"""
+    def test_set_equal_cycle_does_not_loop(self):
+        """'set_equal A B' + 'set_equal B A' is degenerate but must terminate"""
 
         A, B = ('mass', (4,)), ('mass', (5,))
-        identify = mg_interface.MadGraphCmd.resolve_identify([(A, B), (B, A)])
+        set_equal = mg_interface.MadGraphCmd.resolve_set_equal([(A, B), (B, A)])
         card = check_param_card.ParamCard(self.text.split('\n'))
-        self.cmd.apply_customize_rules(card, [], [], [], identify)
+        self.cmd.apply_customize_rules(card, [], [], [], set_equal)
         self.assertEqual(card['mass'].get([4]).value, card['mass'].get([5]).value)
 
-    def test_identify_follows_a_restricted_parameter(self):
-        """'identify A B' with B set to zero does put A to zero as well"""
+    def test_set_equal_follows_a_restricted_parameter(self):
+        """'set_equal A B' with B set to zero does put A to zero as well"""
 
         self.cmd.apply_customize_rules(self.card, [], set_zero=[('mass', (5,))],
-                    set_one=[], identify=[(('yukawa', (5,)), ('mass', (5,)))])
+                    set_one=[], set_equal=[(('yukawa', (5,)), ('mass', (5,)))])
         self.assertEqual(self.card['yukawa'].get([5]).value, 0.)
 
 
@@ -341,19 +341,19 @@ class TestAskforCustomize(unittest.TestCase):
         self.assertEqual(self.ask.set_zero, [])
         self.assertEqual(self.ask.set_one, [('MASS', (5,))])
 
-        self.ask.do_identify('MB MT')
+        self.ask.do_set_equal('MB MT')
         self.assertEqual(self.ask.set_one, [])
-        self.assertEqual(self.ask.identify, [(('MASS', (5,)), ('MASS', (6,)))])
+        self.assertEqual(self.ask.set_equal, [(('MASS', (5,)), ('MASS', (6,)))])
 
-    def test_identify(self):
-        self.ask.do_identify('ymtau MTA')
-        self.assertEqual(self.ask.identify, [(('YUKAWA', (15,)), ('MASS', (15,)))])
+    def test_set_equal(self):
+        self.ask.do_set_equal('ymtau MTA')
+        self.assertEqual(self.ask.set_equal, [(('YUKAWA', (15,)), ('MASS', (15,)))])
         # a parameter can not be identified to itself
-        self.ask.do_identify('MTA MTA')
-        self.assertEqual(len(self.ask.identify), 1)
+        self.ask.do_set_equal('MTA MTA')
+        self.assertEqual(len(self.ask.set_equal), 1)
         # wrong number of arguments
-        self.ask.do_identify('MTA')
-        self.assertEqual(len(self.ask.identify), 1)
+        self.ask.do_set_equal('MTA')
+        self.assertEqual(len(self.ask.set_equal), 1)
 
     def test_formula_and_coupling(self):
         self.ask.do_formula('MB = MT/2.')
@@ -398,7 +398,7 @@ class TestAskforCustomize(unittest.TestCase):
 
     def test_question_lists_the_modifications(self):
         self.ask.do_set_zero('MB')
-        self.ask.do_identify('ymtau MTA')
+        self.ask.do_set_equal('ymtau MTA')
         self.ask.do_coupling('GC_1 = 2*ee')
         question = self.ask.get_question()
         self.assertTrue('MB (MASS [5]) = 0' in question)
@@ -502,16 +502,195 @@ class TestRestrictionGroups(unittest.TestCase):
     def test_groups(self):
         groups = self.cmd.get_restriction_groups([self.category],
                     set_zero=[('YUKAWA', (6,))], set_one=[],
-                    identify=[(('MASS', (5,)), ('MASS', (6,)))],
+                    set_equal=[(('MASS', (5,)), ('MASS', (6,)))],
                     lha2name={('YUKAWA', (6,)): 'ymt', ('MASS', (5,)): 'MB',
                               ('MASS', (6,)): 'MT'})
         labels = [label for label, keys in groups]
         # an option which is not selected has no rule, so it is not a group
         self.assertEqual(labels, ['massless b', 'scheme = a', 'set_zero ymt',
-                                  'identify MB MT'])
+                                  'set_equal MB MT'])
         keys = dict(groups)
         # the rules of an option are grouped together
         self.assertEqual(keys['massless b'],
                          set([('mass', (5,)), ('yukawa', (5,))]))
         self.assertEqual(keys['scheme = a'], set([('mass', (6,))]))
         self.assertEqual(keys['set_zero ymt'], set([('yukawa', (6,))]))
+
+
+#===============================================================================
+# A scheme is only proposed if the model can be put in it
+#===============================================================================
+class FakeParam(object):
+    def __init__(self, name, lhablock, lhacode):
+        self.name, self.lhablock, self.lhacode = name, lhablock, lhacode
+
+
+class FakeParticle(dict):
+    def get(self, name):
+        return self[name]
+
+
+class FakeModel(dict):
+    """the few entries build_restriction_lib reads out of a model"""
+
+    def __init__(self, masses):
+        """masses: pdg -> mass parameter name ('ZERO' for a massless one).
+        A mass is external unless its name starts with 'internal'."""
+
+        particles, external = {}, []
+        for pdg, mass in masses.items():
+            particles[pdg] = FakeParticle({'pdg_code': pdg, 'mass': mass,
+                                           'width': 'ZERO'})
+            if mass != 'ZERO' and not mass.startswith('internal'):
+                external.append(FakeParam(mass, 'MASS', [pdg]))
+        dict.__init__(self, {'particle_dict': particles,
+                             'parameters': {('external',): external}})
+
+    def get(self, name):
+        return self[name]
+
+
+class TestReachableSchemes(unittest.TestCase):
+    """The flavour/lepton scheme is always proposed, but only with the values
+    this model can actually take."""
+
+    def test_all_schemes_when_everything_is_a_parameter(self):
+        model = FakeModel({1: 'ZERO', 2: 'ZERO', 3: 'ZERO', 4: 'MC', 5: 'MB'})
+        option = build_restrict_lib.get_flavour_scheme_option(model, model)
+        self.assertEqual(option.labels, ['3F', '4F', '5F'])
+        self.assertFalse('Only' in option.description)
+
+    def test_only_5F_when_c_and_b_are_massless_in_the_ufo(self):
+        """the option is still proposed, and says why it has a single value"""
+
+        model = FakeModel({1: 'ZERO', 2: 'ZERO', 3: 'ZERO', 4: 'ZERO', 5: 'ZERO'})
+        option = build_restrict_lib.get_flavour_scheme_option(model, model)
+        self.assertEqual(option.labels, ['5F'])
+        self.assertEqual(option.status, '5F')
+        self.assertTrue('Only 5F possible for this model' in option.description)
+        self.assertTrue('c, b have no mass in this model' in option.description)
+        # cycling on a single value is a no-op, not a crash
+        option.next_status()
+        self.assertEqual(option.status, '5F')
+
+    def test_3F_refused_when_c_has_no_mass(self):
+        model = FakeModel({1: 'ZERO', 2: 'ZERO', 3: 'ZERO', 4: 'ZERO', 5: 'MB'})
+        option = build_restrict_lib.get_flavour_scheme_option(model, model)
+        self.assertEqual(option.labels, ['4F', '5F'])
+        self.assertTrue('3F (c has no mass in this model)' in option.description)
+
+    def test_scheme_refused_when_the_mass_is_internal(self):
+        """a mass which is not in the param_card can not be set to zero"""
+
+        model = FakeModel({1: 'ZERO', 2: 'ZERO', 3: 'ZERO',
+                           4: 'internal_MC', 5: 'MB'})
+        option = build_restrict_lib.get_flavour_scheme_option(model, model)
+        self.assertEqual(option.labels, ['3F'])
+        self.assertTrue('the mass of c is not in the param_card'
+                        in option.description)
+
+    def test_no_option_without_quarks(self):
+        self.assertEqual(
+            build_restrict_lib.get_flavour_scheme_option(FakeModel({}), FakeModel({})),
+            None)
+
+    def test_lepton_scheme_is_restricted_too(self):
+        model = FakeModel({11: 'ZERO', 13: 'ZERO', 15: 'MTA'})
+        option = build_restrict_lib.get_lepton_scheme_option(model, model)
+        self.assertEqual(option.labels, ['0', '1'])
+        self.assertTrue('Only 0 and 1 possible for this model'
+                        in option.description)
+
+    def test_no_lepton_option_without_leptons(self):
+        self.assertEqual(
+            build_restrict_lib.get_lepton_scheme_option(FakeModel({}), FakeModel({})),
+            None)
+
+
+class TestQuestionAlwaysShowsTheModifications(unittest.TestCase):
+    """The parameter/coupling section is shown even when it is empty, so that
+    the set_zero/set_one commands are discoverable."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.full_model = import_ufo.import_full_model(
+                                            import_ufo.find_ufo_path('sm'))
+
+    def setUp(self):
+        self.cmd = mg_interface.MadGraphCmd()
+        self.cmd._curr_model = self.full_model
+        self.ask = mg_interface.AskforCustomize('', mother_interface=self.cmd,
+            categories=self.cmd.get_customize_categories(self.full_model,
+                                                         self.full_model))
+
+    def test_empty_section_is_shown(self):
+        question = self.ask.get_question()
+        self.assertTrue('parameter/coupling modifications (use set_zero/set_one):'
+                        in question)
+        self.assertTrue('    none' in question)
+
+    def test_section_lists_the_modifications(self):
+        self.ask.do_set_zero('MB')
+        question = self.ask.get_question()
+        self.assertTrue('parameter/coupling modifications (use set_zero/set_one):'
+                        in question)
+        self.assertFalse('    none' in question)
+        self.assertTrue('MB (MASS [5]) = 0' in question)
+
+
+#===============================================================================
+# set_equal only proposes what can really be merged
+#===============================================================================
+class TestSetEqualCompletion(unittest.TestCase):
+    """The restriction only fuses two parameters of a same block (and never two
+    widths), so the completion must not propose anything else."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.full_model = import_ufo.import_full_model(
+                                            import_ufo.find_ufo_path('sm'))
+
+    def setUp(self):
+        self.cmd = mg_interface.MadGraphCmd()
+        self.cmd._curr_model = self.full_model
+        self.ask = mg_interface.AskforCustomize('', mother_interface=self.cmd,
+            categories=self.cmd.get_customize_categories(self.full_model,
+                                                         self.full_model))
+
+    def complete(self, line):
+        return self.ask.complete_set_equal(line.split()[-1] if
+                    not line.endswith(' ') else '', line, len(line), len(line))
+
+    def test_widths_are_never_proposed(self):
+        """two zero widths are not two identical parameters for the restriction"""
+
+        self.assertFalse('decay' in self.ask.get_identifiable())
+        for name in self.complete('set_equal '):
+            param = self.ask.external_params[name.lower()]
+            self.assertNotEqual(param.lhablock.lower(), 'decay')
+
+    def test_a_block_with_a_single_parameter_is_not_proposed(self):
+        """such a parameter could only be merged across blocks, which the
+        restriction does not do"""
+
+        for block, names in self.ask.get_identifiable().items():
+            self.assertTrue(len(names) > 1, block)
+
+    def test_first_argument(self):
+        first = self.complete('set_equal ')
+        self.assertTrue('MB' in first)   # MASS has several entries
+        self.assertTrue('ymb' in first)  # and so has YUKAWA
+
+    def test_second_argument_stays_in_the_block(self):
+        """once MB is given, only the other masses can be proposed"""
+
+        second = self.complete('set_equal MB ')
+        self.assertTrue('MT' in second)
+        self.assertFalse('MB' in second)     # not itself
+        self.assertFalse('ymb' in second)    # not another block
+        for name in second:
+            self.assertEqual(
+                self.ask.external_params[name.lower()].lhablock.lower(), 'mass')
+
+    def test_second_argument_of_an_unknown_parameter(self):
+        self.assertEqual(self.complete('set_equal NotAParameter '), [])

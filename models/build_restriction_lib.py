@@ -119,6 +119,9 @@ LIGHT_QUARKS = [1, 2, 3]   # d, u, s: massless in all the flavour schemes
 HEAVY_QUARKS = [4, 5]      # c, b
 LEPTONS = [15, 13, 11]     # tau, mu, e: ordered from the heaviest
 
+PARTICLE_NAME = {1: 'd', 2: 'u', 3: 's', 4: 'c', 5: 'b',
+                 11: 'e', 13: 'mu', 15: 'tau'}
+
 
 def get_external_parameters(model):
     """return the list of the external parameters of the model"""
@@ -188,19 +191,68 @@ def is_massive(model, pdg):
     return True
 
 
+def can_be_massive(model, pdg):
+    """a particle can be given a mass only if it has a mass parameter at all
+    (a UFO where the mass is hardcoded to ZERO can not be changed by a
+    restriction card)"""
+
+    particle = model.get('particle_dict').get(pdg, None)
+    if particle is None:
+        return False
+    return particle.get('mass').lower() != 'zero'
+
+
+def can_be_massless(model, pdg):
+    """a particle can be made massless if it already is, or if its mass is one
+    of the parameters of the param_card"""
+
+    particle = model.get('particle_dict').get(pdg, None)
+    if particle is None:
+        return True
+    if particle.get('mass').lower() == 'zero':
+        return True
+    return particle.get('mass') in set(param.name
+                                for param in get_external_parameters(model))
+
+
+def why_not_reachable(model, massive, massless):
+    """the reason -in plain words- why a model can not be put in a scheme where
+    the particles of massive have a mass and the ones of massless do not"""
+
+    out = []
+    blocked = [PARTICLE_NAME.get(pdg, pdg) for pdg in massive
+                                          if not can_be_massive(model, pdg)]
+    if blocked:
+        out.append('%s %s no mass in this model' % (', '.join(str(p) for p in blocked),
+                                       'has' if len(blocked) == 1 else 'have'))
+    blocked = [PARTICLE_NAME.get(pdg, pdg) for pdg in massless
+                                          if not can_be_massless(model, pdg)]
+    if blocked:
+        out.append('the mass of %s is not in the param_card' %
+                   ', '.join(str(p) for p in blocked))
+    return ', '.join(out)
+
+
 def get_flavour_scheme_option(model, reference):
     """the 3F/4F/5F choice for the quarks. model is the model to restrict
     (no restriction applied), reference is the model as currently loaded by
     the user and is only used to define the default value of the option."""
 
-    choices = []
+    if not any(model.get('particle_dict').get(pdg, None)
+                                for pdg in LIGHT_QUARKS + HEAVY_QUARKS):
+        return None # not a model with quarks
+
+    # a scheme is only proposed if this model can be put in it
+    choices, refused = [], []
     for nf in [3, 4, 5]:
         massless = [pdg for pdg in LIGHT_QUARKS + HEAVY_QUARKS if pdg <= nf]
-        choices.append(('%dF' % nf, get_mass_rules(model, massless)))
-
-    # nothing can be changed in this model: do not propose the option
-    if not any(rules for label, rules in choices):
-        return None
+        massive = [pdg for pdg in HEAVY_QUARKS if pdg > nf]
+        why = why_not_reachable(model, massive,
+                                [pdg for pdg in massless if pdg in HEAVY_QUARKS])
+        if why:
+            refused.append('%dF (%s)' % (nf, why))
+        else:
+            choices.append(('%dF' % nf, get_mass_rules(model, massless)))
 
     # default: reproduce the scheme of the model as currently loaded
     if not is_massive(reference, 5) and not is_massive(reference, 4):
@@ -210,28 +262,57 @@ def get_flavour_scheme_option(model, reference):
     else:
         default = '3F'
 
+    labels = [label for label, rules in choices]
+    if default not in labels:
+        if not choices:
+            # nothing is reachable: still show the scheme this model is in
+            massless = [pdg for pdg in LIGHT_QUARKS + HEAVY_QUARKS
+                                                     if pdg <= int(default[0])]
+            choices = [(default, get_mass_rules(model, massless))]
+        else:
+            default = labels[0]
+
+    description = ('3F: c and b massive, 4F: b massive, 5F: none of them.'
+                   ' u, d and s are massless in all the schemes')
+    if refused:
+        description += '. Only %s possible for this model: %s' % (
+            ' and '.join(label for label, rules in choices), '; '.join(refused))
+
     return ChoiceOption('flavour scheme', choices, default,
-              description='3F: c and b massive, 4F: b massive, 5F: none of them.'
-                          ' u, d and s are massless in all the schemes')
+                        description=description)
 
 
 def get_lepton_scheme_option(model, reference):
     """the number of massive leptons (0 to 3). Massive leptons are taken from
     the heaviest one: 1 -> tau, 2 -> tau and mu, 3 -> tau, mu and e."""
 
-    choices = []
-    for nb in [0, 1, 2, 3]:
-        massless = LEPTONS[nb:]
-        choices.append(('%d' % nb, get_mass_rules(model, massless)))
+    if not any(model.get('particle_dict').get(pdg, None) for pdg in LEPTONS):
+        return None # not a model with charged leptons
 
-    if not any(rules for label, rules in choices):
-        return None
+    choices, refused = [], []
+    for nb in [0, 1, 2, 3]:
+        why = why_not_reachable(model, LEPTONS[:nb], LEPTONS[nb:])
+        if why:
+            refused.append('%d (%s)' % (nb, why))
+        else:
+            choices.append(('%d' % nb, get_mass_rules(model, LEPTONS[nb:])))
 
     default = '%d' % len([pdg for pdg in LEPTONS if is_massive(reference, pdg)])
 
+    labels = [label for label, rules in choices]
+    if default not in labels:
+        if not choices:
+            choices = [(default, get_mass_rules(model, LEPTONS[int(default):]))]
+        else:
+            default = labels[0]
+
+    description = '0: all massless, 1: tau, 2: tau mu, 3: tau mu e'
+    if refused:
+        description += '. Only %s possible for this model: %s' % (
+            ' and '.join(label for label, rules in choices), '; '.join(refused))
+
     return ChoiceOption('nb of massive leptons', choices, default,
-                        description='0: all massless, 1: tau, 2: tau mu,'
-                                    ' 3: tau mu e')
+                        description=description)
 
 
 def get_generic_categories(model, reference=None):

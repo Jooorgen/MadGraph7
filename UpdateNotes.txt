@@ -10,8 +10,11 @@ ANNOUNCEMENT:
        model, the following ones are now always proposed:
         - the flavour scheme of the quarks (3F/4F/5F),
         - the number of massive leptons (0 to 3, from the heaviest one),
+          Both are always proposed, but only with the values the model can
+          actually take: a UFO where the c quark has no mass parameter is
+          offered 4F and 5F only, and is told why 3F is missing.
         - 'set_zero NAME'/'set_one NAME' to fix an external parameter to zero/one,
-        - 'identify NAME1 NAME2' to force a parameter to the value of another one,
+        - 'set_equal NAME1 NAME2' to force a parameter to the value of another one,
         - 'formula NAME = EXPR' to turn an external parameter into an internal one
           and 'coupling NAME = EXPR' to change the definition of a coupling. Since
           those two can not be stored in a restriction card, they write a new UFO

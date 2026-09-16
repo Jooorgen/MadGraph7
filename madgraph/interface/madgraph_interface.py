@@ -8770,21 +8770,21 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
                 used.add(abs(value))
 
     @staticmethod
-    def resolve_identify(identify):
-        """'identify A B' followed by 'identify B C' means that A, B and C all
+    def resolve_set_equal(set_equal):
+        """'set_equal A B' followed by 'set_equal B C' means that A, B and C all
         take the value of C. Applying the pairs in the order they were typed
         would instead give A the value B had before it was itself re-pointed,
         so each pair is first resolved to the root of its chain."""
 
-        link = dict(identify)
+        link = dict(set_equal)
         out = []
-        for target, source in identify:
+        for target, source in set_equal:
             root, seen = source, set([target])
             while root in link and root not in seen:
                 seen.add(root)
                 root = link[root]
             if root == target:
-                # a cycle ('identify A B' + 'identify B A'): any member of the
+                # a cycle ('set_equal A B' + 'set_equal B A'): any member of the
                 # cycle is a valid root, keep the one the user gave
                 root = source
             out.append((target, root))
@@ -8792,10 +8792,10 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
 
     @staticmethod
     def apply_customize_rules(param_card, categories, set_zero, set_one,
-                                                                     identify):
+                                                                     set_equal):
         """write in param_card the restrictions asked by the user.
         categories are the (toggled) options of the question, set_zero/set_one
-        are lists of (lhablock, lhacode) and identify a list of
+        are lists of (lhablock, lhacode) and set_equal a list of
         ((lhablock, lhacode), (lhablock, lhacode)) where the first parameter
         is forced to the value of the second one."""
 
@@ -8825,9 +8825,9 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
                     param.value = value
                     restricted.add((lhablock.lower(), tuple(lhacode)))
 
-        # done last so that 'identify A B' where B is itself restricted does
+        # done last so that 'set_equal A B' where B is itself restricted does
         # propagate the restricted value to A
-        for (lhablock, lhacode), (lhablock2, lhacode2) in identify:
+        for (lhablock, lhacode), (lhablock2, lhacode2) in set_equal:
             target = get_param(lhablock, lhacode)
             source = get_param(lhablock2, lhacode2)
             if target is not None and source is not None:
@@ -8867,7 +8867,7 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
                 'masses/widths': sorted(particles)}
 
     def build_restricted_model(self, model_path, param_card, externals,
-                                categories, set_zero, set_one, identify):
+                                categories, set_zero, set_one, set_equal):
         """apply one full restriction of the model. The input values which
         would be simplified by accident are randomized first.
         return the restricted model, the associated restriction card and the
@@ -8876,7 +8876,7 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
         restrict_card = check_param_card.ParamCard(param_card)
         self.randomize_param_card(restrict_card, externals)
         restricted = self.apply_customize_rules(restrict_card, categories,
-                                                set_zero, set_one, identify)
+                                                set_zero, set_one, set_equal)
 
         # the restriction is applied by import_model (and not directly by
         # RestrictModel) so that the model is the very same -flavour grouping
@@ -8892,7 +8892,7 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
         return model, restrict_card, restricted
 
     def get_default_param_card(self, model, default_card, restricted,
-                                                               identify=()):
+                                                               set_equal=()):
         """the param_card of the (restricted) model where all the parameters
         which were not restricted by the user are set back to the default value
         of the model."""
@@ -8914,7 +8914,7 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
 
         # a parameter identified to another one has to follow it, including
         # when the value of that one was restored above
-        for (lhablock, lhacode), (lhablock2, lhacode2) in identify:
+        for (lhablock, lhacode), (lhablock2, lhacode2) in set_equal:
             try:
                 target = param_card[lhablock.lower()].get(list(lhacode))
                 source = param_card[lhablock2.lower()].get(list(lhacode2))
@@ -8927,7 +8927,7 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
     #===========================================================================
     # customize_model --explain: which choice removed which coupling
     #===========================================================================
-    def get_restriction_groups(self, categories, set_zero, set_one, identify,
+    def get_restriction_groups(self, categories, set_zero, set_one, set_equal,
                                                                       lha2name):
         """the user choices, as (label, set of (lhablock, lhacode)) pairs. Those
         are the units the removal of a coupling is attributed to."""
@@ -8957,9 +8957,9 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
             for key in entries:
                 key = (key[0].lower(), tuple(key[1]))
                 groups.append(('%s %s' % (command, name(key)), set([key])))
-        for target, source in identify:
+        for target, source in set_equal:
             target = (target[0].lower(), tuple(target[1]))
-            groups.append(('identify %s %s' % (name(target),
+            groups.append(('set_equal %s %s' % (name(target),
                        name((source[0].lower(), tuple(source[1])))), set([target])))
 
         return groups
@@ -9047,7 +9047,7 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
         return removed, modified
 
     def explain_restriction(self, model_path, default_card, externals, groups,
-                                    categories, set_zero, set_one, identify):
+                                    categories, set_zero, set_one, set_equal):
         """Report what each of the user choices does to the couplings of the
         model: which ones it drops and which ones it fuses with another.
 
@@ -9064,7 +9064,7 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
         self.randomize_param_card(unrestricted, externals)
         restricted = check_param_card.ParamCard(unrestricted)
         self.apply_customize_rules(restricted, categories, set_zero, set_one,
-                                                                      identify)
+                                                                      set_equal)
 
         # what is already zero/fused without any restriction is a property of
         # the model, not something the user did
@@ -9174,7 +9174,7 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
 
         set_zero = ask_instance.set_zero
         set_one = ask_instance.set_one
-        identify = self.resolve_identify(ask_instance.identify)
+        set_equal = self.resolve_set_equal(ask_instance.set_equal)
         new_formula = ask_instance.new_formula
         new_coupling = ask_instance.new_coupling
 
@@ -9202,14 +9202,14 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
         externals = self.get_external_lhacode(self._curr_model)
         model, restrict_card, restricted = self.build_restricted_model(
             model_path, default_card, externals, categories, set_zero, set_one,
-            identify)
+            set_equal)
 
         if explain:
             groups = self.get_restriction_groups(categories, set_zero, set_one,
-                                          identify, ask_instance.lha2name)
+                                          set_equal, ask_instance.lha2name)
             try:
                 self.explain_restriction(model_path, default_card, externals,
-                        groups, categories, set_zero, set_one, identify)
+                        groups, categories, set_zero, set_one, set_equal)
             except Exception as error:
                 # the report is informative only: never let it break the command
                 logger.warning('Could not build the restriction report: %s', error)
@@ -9221,7 +9221,7 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
             # check that we do end up with the very same model.
             logger.info('Checking the stability of the restriction')
             check_model = self.build_restricted_model(model_path, default_card,
-                        externals, categories, set_zero, set_one, identify)[0]
+                        externals, categories, set_zero, set_one, set_equal)[0]
             signature = self.get_restriction_signature(model)
             check_signature = self.get_restriction_signature(check_model)
             diff = [key for key, value in signature.items()
@@ -9244,7 +9244,7 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
         self._curr_model = model
         # restore the default value of everything the user did not restrict
         param_card = self.get_default_param_card(model, default_card, restricted,
-                                                 identify)
+                                                 set_equal)
         self._curr_model.set_parameters_and_couplings(param_card)
         # rewrite it so that the informative entries (dependent parameters) of
         # the card are the ones of the model with its default values
@@ -12279,10 +12279,11 @@ class AskforCustomize(cmd.SmartQuestion):
         # the customizations which are not a simple on/off switch
         self.set_zero = []    # [(lhablock, lhacode)]
         self.set_one = []     # [(lhablock, lhacode)]
-        self.identify = []    # [((lhablock, lhacode), (lhablock, lhacode))]
+        self.set_equal = []    # [((lhablock, lhacode), (lhablock, lhacode))]
         self.new_formula = [] # [(parameter name, expression)]
         self.new_coupling = []# [(coupling name, expression)]
         self.formula_target = {} # parameter name -> (lhablock, lhacode)
+        self._identifiable = None # cache for the set_equal completion
 
         question = self.get_question()
         # determine the possible value and how they are linked to the restriction
@@ -12306,6 +12307,18 @@ class AskforCustomize(cmd.SmartQuestion):
         cmdloop() in interactive mode, so that a scripted answer (which does
         not go through cmdloop) returns the very same object."""
         return self.all_categories
+
+    @property
+    def question(self):
+        """The question is fully derived from the current state, so it is
+        rebuilt on every read: a command answered from a script never goes
+        through reask(), and would otherwise be shown the state of the
+        question as it was before any of the commands ran."""
+        return self.get_question()
+
+    @question.setter
+    def question(self, value):
+        pass # derived, see above
 
     def default(self, line):
         """Default action if line is not recognized"""
@@ -12333,7 +12346,6 @@ class AskforCustomize(cmd.SmartQuestion):
     def reask(self, reprint_opt=True):
         """ """
         reprint_opt = True
-        self.question = self.get_question()
         cmd.SmartQuestion.reask(self, reprint_opt)
 
     def do_set(self, line):
@@ -12413,20 +12425,20 @@ class AskforCustomize(cmd.SmartQuestion):
         self.forget_parameter(param)
         self.set_one.append(param)
 
-    def do_identify(self, line):
+    def do_set_equal(self, line):
         """force an external parameter to take the value of another one"""
 
         self.value = 'repeat'
         args = line.split()
         if len(args) != 2:
-            logger.warning('Invalid identify command. Syntax is: identify NAME1 NAME2')
+            logger.warning('Invalid set_equal command. Syntax is: set_equal NAME1 NAME2')
             return
         param = self.get_external_parameter(args[0])
         param2 = self.get_external_parameter(args[1])
         if param is None or param2 is None:
             return
         if param == param2:
-            logger.warning('Can not identify a parameter to itself.')
+            logger.warning('Can not set a parameter equal to itself.')
             return
         if param[0].lower() != param2[0].lower():
             # the model restriction only merges two parameters of a same block:
@@ -12439,7 +12451,7 @@ class AskforCustomize(cmd.SmartQuestion):
                 'new model on disk).', args[0], args[1], param[0], param2[0],
                 args[0], args[1])
         self.forget_parameter(param)
-        self.identify.append((param, param2))
+        self.set_equal.append((param, param2))
 
     def do_formula(self, line):
         """define an external parameter as a formula of other parameters.
@@ -12512,7 +12524,7 @@ class AskforCustomize(cmd.SmartQuestion):
             return
         self.set_zero = [p for p in self.set_zero if p != param]
         self.set_one = [p for p in self.set_one if p != param]
-        self.identify = [(p, p2) for (p, p2) in self.identify if p != param]
+        self.set_equal = [(p, p2) for (p, p2) in self.set_equal if p != param]
         self.new_formula = [(n, e) for (n, e) in self.new_formula
                             if self.formula_target.get(n, None) != param]
 
@@ -12522,7 +12534,7 @@ class AskforCustomize(cmd.SmartQuestion):
         self.value = 'repeat'
         self.set_zero = []
         self.set_one = []
-        self.identify = []
+        self.set_equal = []
         self.new_formula = []
         self.new_coupling = []
         self.formula_target = {}
@@ -12553,17 +12565,19 @@ class AskforCustomize(cmd.SmartQuestion):
             current.append('    %s = 0' % fmt(param))
         for param in self.set_one:
             current.append('    %s = 1' % fmt(param))
-        for param, param2 in self.identify:
+        for param, param2 in self.set_equal:
             current.append('    %s = %s' % (fmt(param), fmt(param2)))
         for name, expr in self.new_formula:
             current.append('    %s = %s' % (name, expr))
         for name, expr in self.new_coupling:
             current.append('    %s = %s' % (name, expr))
+        question += 'parameter/coupling modifications (use set_zero/set_one):\n'
         if current:
-            question += 'parameter/coupling modifications:\n'
             question += '\n'.join(current) + '\n'
+        else:
+            question += '    none\n'
 
-        question += 'For more options (setting a parameter to zero/one/..., changing a formula),\n'
+        question += 'For the other commands (set_equal, formula, coupling, clear),\n'
         question += 'or for scripting this function, please type: \'help\''
         return question
 
@@ -12588,8 +12602,42 @@ class AskforCustomize(cmd.SmartQuestion):
                   [param.name for param in self.external_params.values()], line)
 
     complete_set_one = complete_set_zero
-    complete_identify = complete_set_zero
     complete_formula = complete_set_zero
+
+    def get_identifiable(self):
+        """the external parameters which can really be merged with another one,
+        grouped by block. The restriction only fuses two parameters of a same
+        block of the param_card, and never two widths."""
+
+        if self._identifiable is None:
+            by_block = {}
+            for param in self.external_params.values():
+                if param.lhablock.lower() == 'decay':
+                    continue
+                by_block.setdefault(param.lhablock.lower(), []).append(param.name)
+            self._identifiable = dict((block, sorted(names))
+                            for block, names in by_block.items() if len(names) > 1)
+        return self._identifiable
+
+    def complete_set_equal(self, text, line, begidx, endidx):
+        """Complete the set_equal command. Only the parameters which can
+        actually be merged are proposed, and for the second argument only the
+        ones of the same block as the first."""
+
+        signal.alarm(0) # avoid timer if any
+        args = self.split_arg(line[0:begidx])
+        identifiable = self.get_identifiable()
+
+        if len(args) == 1:
+            return self.list_completion(text,
+                    sum([names for names in identifiable.values()], []), line)
+        elif len(args) == 2:
+            param = self.external_params.get(args[1].lower(), None)
+            if param is None:
+                return []
+            names = identifiable.get(param.lhablock.lower(), [])
+            return self.list_completion(text,
+                            [n for n in names if n != param.name], line)
 
     def complete_coupling(self, text, line, begidx, endidx):
         """ Complete the coupling command"""
@@ -12625,7 +12673,7 @@ class AskforCustomize(cmd.SmartQuestion):
         print('On top of those options, the following commands are available:')
         print('   set_zero NAME          : set the external parameter NAME to zero')
         print('   set_one NAME           : set the external parameter NAME to one')
-        print('   identify NAME1 NAME2   : force NAME1 to take the value of NAME2')
+        print('   set_equal NAME1 NAME2  : force NAME1 to take the value of NAME2')
         print('   clear                  : forget all those modifications')
         print('')
         print('The two following commands change a formula of the model. They can')
