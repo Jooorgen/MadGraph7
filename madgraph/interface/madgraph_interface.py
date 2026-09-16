@@ -8813,6 +8813,31 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
         return options
 
     @staticmethod
+    def apply_default_values(param_card, ask_instance):
+        """where the values of param_card come from: the model itself, a card
+        the user gave with 'set default PATH', and the parameters they set one
+        by one with 'set default NAME VALUE' (which win over the card)."""
+
+        source = ask_instance.default_card_values
+        if source is not None:
+            for block in param_card:
+                if block.startswith(('qnumbers', 'decay_table')) or 'info' in block:
+                    continue
+                for param in param_card[block]:
+                    value = source.get_value(block, tuple(param.lhacode),
+                                             default='__not_set__')
+                    if value != '__not_set__':
+                        param.value = value
+
+        for (lhablock, lhacode), value in ask_instance.default_values.items():
+            try:
+                param_card[lhablock.lower()].get(list(lhacode)).value = value
+            except (KeyError, IndexError):
+                logger.warning('%s %s is not in the param_card of the model '
+                               'anymore: its default value is ignored.',
+                               lhablock, list(lhacode))
+
+    @staticmethod
     def get_full_param_card(model):
         """the param_card of a model, with the default value of every parameter"""
 
@@ -9479,8 +9504,10 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
             self.warn_rules_lost_by_formula(categories,
                     old_externals - self.get_external_lhacode(self._curr_model))
 
-        # the values of the model, used to restore the non restricted parameters
+        # the values of the model, used to restore the non restricted
+        # parameters, with what 'set default' asked for on top of them
         default_card = self.get_full_param_card(self._curr_model)
+        self.apply_default_values(default_card, ask_instance)
 
         logger.info('Loading the resulting model')
         externals = self.get_external_lhacode(self._curr_model)
@@ -12670,6 +12697,11 @@ class AskforCustomize(cmd.SmartQuestion):
         self.new_coupling = []# [(coupling name, expression)]
         self.formula_target = {} # parameter name -> (lhablock, lhacode)
         self._identifiable = None # cache for the set_equal completion
+        # where the value of a parameter comes from: the UFO model by default,
+        # otherwise a card given by the user, plus its explicit overrides
+        self.default_card = None       # path, for the display
+        self.default_card_values = None # the parsed card
+        self.default_values = {}       # (lhablock, lhacode) -> value
         # customize_model --explain: report each command as it is entered
         self.explainer = opt.pop('explainer', None)
 
@@ -12750,6 +12782,8 @@ class AskforCustomize(cmd.SmartQuestion):
             logger.warning('Invalid set command. Syntax is: set NAME VALUE')
             return
 
+        if args[0].lower() == 'default':
+            return self.set_default(args[1:])
         if args[0] in self.name2options:
             return self.set_option(args)
         if args[0].lower() in self.external_params or \
@@ -12786,6 +12820,63 @@ class AskforCustomize(cmd.SmartQuestion):
             logger.warning('%s is not True/False. Didn\'t do anything.' % args[1])
             return
         self.explain_change()
+
+    def set_default(self, args):
+        """'set default UFO', 'set default PATH' and 'set default NAME [=] VALUE'
+        choose where the values written in the param_card come from. They are
+        the values of the model, not a restriction: use set_zero/set_one to
+        remove a parameter from the model."""
+
+        if not args:
+            logger.warning('Invalid set default command. Syntax is: '
+                'set default UFO | PATH | NAME [=] VALUE')
+            return
+
+        if len(args) == 1:
+            if args[0].lower() == 'ufo':
+                self.default_card = None
+                self.default_card_values = None
+                self.default_values = {}
+                logger.info('Default values taken from the UFO model.')
+                return
+            if not os.path.isfile(args[0]):
+                logger.warning('%s is neither \'UFO\' nor a file. Syntax is: '
+                    'set default UFO | PATH | NAME [=] VALUE', args[0])
+                return
+            try:
+                card = check_param_card.ParamCard(args[0])
+            except Exception as error:
+                logger.warning('%s is not a valid param_card: %s', args[0], error)
+                return
+            self.default_card = args[0]
+            self.default_card_values = card
+            logger.info('Default values taken from %s (for the parameters it '
+                        'defines, the UFO value for the others).', args[0])
+            return
+
+        param = self.get_external_parameter(args[0])
+        if param is None:
+            return
+        try:
+            value = float(args[-1])
+        except ValueError:
+            logger.warning('%s is not a number. Syntax is: '
+                           'set default NAME [=] VALUE', args[-1])
+            return
+        self.default_values[param] = value
+
+    def get_default_value(self, param):
+        """the value of a parameter, as the user asked for it"""
+
+        key = (param.lhablock, tuple(param.lhacode))
+        if key in self.default_values:
+            return self.default_values[key]
+        if self.default_card_values is not None:
+            value = self.default_card_values.get_value(param.lhablock.lower(),
+                                    tuple(param.lhacode), default='__not_set__')
+            if value != '__not_set__':
+                return value
+        return param.value
 
     def set_parameter(self, args):
         """'set NAME 0', 'set NAME 1' and 'set NAME = OTHER' are the same as
@@ -12995,6 +13086,9 @@ class AskforCustomize(cmd.SmartQuestion):
         self.new_formula = []
         self.new_coupling = []
         self.formula_target = {}
+        self.default_card = None
+        self.default_card_values = None
+        self.default_values = {}
         self.explain_change()
 
     #===========================================================================
@@ -13086,7 +13180,7 @@ class AskforCustomize(cmd.SmartQuestion):
                 key = (block.lower(), tuple(param.lhacode))
                 logger.info('    %-22s %-8s %-14s %s', param.name,
                             ' '.join(str(code) for code in param.lhacode),
-                            self.format_value(param.value),
+                            self.format_value(self.get_default_value(param)),
                             '-> %s' % restricted[key] if key in restricted else '')
         if pattern is not None:
             self.display_internal(pattern)
@@ -13144,7 +13238,8 @@ class AskforCustomize(cmd.SmartQuestion):
                 # where the reason of a drop is to be found
                 key = (param.lhablock.lower(), tuple(param.lhacode))
                 logger.info('%s%-22s = %-12s (%s %s)%s' % (indent, param.name,
-                            self.format_value(param.value), param.lhablock,
+                            self.format_value(self.get_default_value(param)),
+                            param.lhablock,
                             list(param.lhacode),
                             '   -> %s' % restricted[key] if key in restricted
                             else ''),
@@ -13274,6 +13369,12 @@ class AskforCustomize(cmd.SmartQuestion):
         else:
             question += '    none\n'
 
+        if self.default_card or self.default_values:
+            question += 'default values: %s\n' % (self.default_card or
+                                                  'the UFO model')
+            for key, value in self.default_values.items():
+                question += '    %s = %s\n' % (fmt(key), value)
+
         question += 'For the other commands (set_equal, formula, coupling, display, clear),\n'
         question += 'or for scripting this function, please type: \'help\''
         return question
@@ -13387,6 +13488,11 @@ class AskforCustomize(cmd.SmartQuestion):
         print('   clear                  : forget all those modifications')
         print('   display parameters [X] : the parameters of the model (all of')
         print('                            them, or the block/names matching X)')
+        print('   set default UFO        : take the values of the model (default)')
+        print('   set default PATH       : take them from that param_card')
+        print('   set default NAME VALUE : set the value of one parameter.')
+        print('                            Those are values, not restrictions:')
+        print('                            use set_zero to remove a parameter.')
         print('   display couplings [X]  : the couplings, with their expression.')
         print('                            When X selects a few of them, every')
         print('                            parameter of the expression is')

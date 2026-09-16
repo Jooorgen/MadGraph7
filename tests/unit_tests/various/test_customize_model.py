@@ -1260,3 +1260,86 @@ class TestFullListing(unittest.TestCase):
 
         self.cmd.check_customize_model(['--explain=final', '--all'])
         self.cmd.check_customize_model(['--all'])
+
+
+#===============================================================================
+# 'set default': where the values of the param_card come from
+#===============================================================================
+class TestSetDefault(unittest.TestCase):
+    """The values written in param_NAME.dat are the ones of the UFO, unless
+    the user points at a card or sets a parameter by hand."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.sm_path = import_ufo.find_ufo_path('sm')
+        cls.full_model = import_ufo.import_full_model(cls.sm_path)
+
+    def setUp(self):
+        self.cmd = mg_interface.MadGraphCmd()
+        self.cmd._curr_model = self.full_model
+        self.ask = mg_interface.AskforCustomize('', mother_interface=self.cmd,
+            categories=self.cmd.get_customize_categories(self.full_model,
+                                                         self.full_model))
+        self.card = os.path.join(self.sm_path, 'restrict_ckm.dat')
+
+    def value_of(self, name):
+        return self.ask.get_default_value(self.ask.external_params[name])
+
+    def test_the_ufo_is_the_default(self):
+        """MT is 172 in the UFO and 173 in the restriction cards"""
+
+        self.assertEqual(self.value_of('mt'), 172.)
+        self.assertEqual(self.ask.default_card, None)
+
+    def test_a_card(self):
+        self.ask.do_set('default %s' % self.card)
+        self.assertEqual(self.ask.default_card, self.card)
+        self.assertEqual(self.value_of('mt'), 173.)
+        # a parameter the card does not define keeps the value of the UFO
+        self.assertEqual(self.value_of('mh'), 125.)
+
+    def test_one_parameter(self):
+        for line in ['default MH = 130', 'default MH 130']:
+            self.ask.do_set('default UFO')
+            self.ask.do_set(line)
+            self.assertEqual(self.value_of('mh'), 130., line)
+
+    def test_a_parameter_wins_over_the_card(self):
+        self.ask.do_set('default %s' % self.card)
+        self.ask.do_set('default MT = 171')
+        self.assertEqual(self.value_of('mt'), 171.)
+
+    def test_ufo_resets_everything(self):
+        self.ask.do_set('default %s' % self.card)
+        self.ask.do_set('default MH = 130')
+        self.ask.do_set('default UFO')
+        self.assertEqual(self.ask.default_card, None)
+        self.assertEqual(self.ask.default_values, {})
+        self.assertEqual(self.value_of('mt'), 172.)
+        self.assertEqual(self.value_of('mh'), 125.)
+
+    def test_refused_inputs(self):
+        self.ask.do_set('default /not/a/file.dat')
+        self.assertEqual(self.ask.default_card, None)
+        self.ask.do_set('default NotAParameter = 1')
+        self.ask.do_set('default MH = not_a_number')
+        self.ask.do_set('default')
+        self.assertEqual(self.ask.default_values, {})
+
+    def test_clear_forgets_them(self):
+        self.ask.do_set('default %s' % self.card)
+        self.ask.do_set('default MH = 130')
+        self.ask.do_clear('')
+        self.assertEqual(self.ask.default_card, None)
+        self.assertEqual(self.ask.default_values, {})
+
+    def test_the_card_is_built_with_them(self):
+        """apply_default_values is what puts them in the param_card"""
+
+        self.ask.do_set('default %s' % self.card)
+        self.ask.do_set('default MH = 130')
+        param_card = self.cmd.get_full_param_card(self.full_model)
+        self.assertEqual(param_card['mass'].get([6]).value, 172.)
+        self.cmd.apply_default_values(param_card, self.ask)
+        self.assertEqual(param_card['mass'].get([6]).value, 173.)
+        self.assertEqual(param_card['mass'].get([25]).value, 130.)
