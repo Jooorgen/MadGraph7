@@ -1413,3 +1413,96 @@ class TestLoadedDefaults(unittest.TestCase):
                                                     None, self.externals)
         self.assertEqual(recovered, [])
         self.assertEqual(card['mass'].get([6]).value, 172.)
+
+
+#===============================================================================
+# 'BLOCK all': act on every parameter of a block of the param_card
+#===============================================================================
+class TestBlockAssignment(unittest.TestCase):
+    """'set decay all 0', 'set_zero yukawa all', 'set default CEFT all 0'"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.full_model = import_ufo.import_full_model(
+                                            import_ufo.find_ufo_path('sm'))
+
+    def setUp(self):
+        self.cmd = mg_interface.MadGraphCmd()
+        self.cmd._curr_model = self.full_model
+        self.ask = mg_interface.AskforCustomize('', mother_interface=self.cmd,
+            categories=self.cmd.get_customize_categories(self.full_model,
+                                                         self.full_model))
+        self.yukawa = set(key for key in self.ask.lha2name if key[0] == 'yukawa')
+
+    def test_resolve_a_name(self):
+        keys, rest = self.ask.resolve_parameters(['MB', '0'])
+        self.assertEqual(keys, [('MASS', (5,))])
+        self.assertEqual(rest, ['0'])
+
+    def test_resolve_a_block(self):
+        keys, rest = self.ask.resolve_parameters(['yukawa', 'all', '0'])
+        self.assertEqual(set((b.lower(), c) for b, c in keys), self.yukawa)
+        self.assertEqual(rest, ['0'])
+        # the block name is case insensitive
+        self.assertEqual(len(self.ask.resolve_parameters(['YUKAWA', 'all'])[0]),
+                         len(self.yukawa))
+
+    def test_resolve_an_unknown_block(self):
+        keys, rest = self.ask.resolve_parameters(['NotABlock', 'all', '0'])
+        self.assertEqual(keys, None)
+        self.assertEqual(rest, ['0'])
+
+    def test_set_zero_of_a_block(self):
+        self.ask.do_set_zero('yukawa all')
+        self.assertEqual(set((b.lower(), c) for b, c in self.ask.set_zero),
+                         self.yukawa)
+
+    def test_set_one_of_a_block(self):
+        self.ask.do_set_one('yukawa all')
+        self.assertEqual(set((b.lower(), c) for b, c in self.ask.set_one),
+                         self.yukawa)
+        self.assertEqual(self.ask.set_zero, [])
+
+    def test_the_set_alias(self):
+        self.ask.do_set('decay all 0')
+        self.assertTrue(self.ask.set_zero)
+        for block, code in self.ask.set_zero:
+            self.assertEqual(block.lower(), 'decay')
+
+    def test_set_default_of_a_block(self):
+        self.ask.do_set('default wolfenstein all 0.5')
+        self.assertEqual(len(self.ask.default_values), 4)
+        for value in self.ask.default_values.values():
+            self.assertEqual(value, 0.5)
+        self.assertEqual(self.ask.get_default_value(
+                            self.ask.external_params['lamws']), 0.5)
+
+    def test_a_block_can_not_be_set_equal(self):
+        self.ask.do_set('yukawa all MB')
+        self.assertEqual(self.ask.set_equal, [])
+        self.assertEqual(self.ask.set_zero, [])
+
+    def test_a_block_replaces_a_single_parameter(self):
+        """the last command on a parameter is the one which counts"""
+
+        self.ask.do_set_one('ymb')
+        self.ask.do_set_zero('yukawa all')
+        self.assertEqual(self.ask.set_one, [])
+        self.assertEqual(len(self.ask.set_zero), len(self.yukawa))
+
+    def test_the_question_groups_them_back(self):
+        self.ask.do_set_zero('yukawa all')
+        self.ask.do_set('default wolfenstein all 0.5')
+        question = self.ask.get_question()
+        self.assertTrue('YUKAWA all = 0' in question)
+        self.assertTrue('Wolfenstein all = 0.5' in question)
+        # a single parameter is still named
+        self.ask.do_set_one('MB')
+        self.assertTrue('MB (MASS [5]) = 1' in self.ask.get_question())
+
+    def test_completion(self):
+        out = self.ask.complete_set_zero('', 'set_zero ', 9, 9)
+        self.assertTrue('YUKAWA' in out)
+        self.assertTrue('ymb' in out)
+        self.assertEqual(self.ask.complete_set_zero('', 'set_zero yukawa ',
+                                                    16, 16), ['all'])

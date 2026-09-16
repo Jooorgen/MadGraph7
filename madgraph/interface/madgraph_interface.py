@@ -12856,6 +12856,9 @@ class AskforCustomize(cmd.SmartQuestion):
             return self.set_default(args[1:])
         if args[0] in self.name2options:
             return self.set_option(args)
+        if len(args) >= 2 and args[1].lower() == 'all' \
+                          and self.get_block_parameters(args[0]):
+            return self.set_parameter(args)
         if args[0].lower() in self.external_params or \
                                     args[0].lower() in self.internal_params:
             return self.set_parameter(args)
@@ -12927,16 +12930,24 @@ class AskforCustomize(cmd.SmartQuestion):
                         'defines, the ones of the model for the others).', args[0])
             return
 
-        param = self.get_external_parameter(args[0])
-        if param is None:
+        keys, value = self.resolve_parameters(args)
+        if keys is None:
+            return
+        if value and value[0] == '=':
+            value = value[1:]
+        if len(value) != 1:
+            logger.warning('Invalid set default command. Syntax is: '
+                'set default UFO | PATH | NAME [=] VALUE (NAME can also be '
+                '\'BLOCK all\')')
             return
         try:
-            value = float(args[-1])
+            value = float(value[0])
         except ValueError:
             logger.warning('%s is not a number. Syntax is: '
-                           'set default NAME [=] VALUE', args[-1])
+                           'set default NAME [=] VALUE', value[0])
             return
-        self.default_values[param] = value
+        for key in keys:
+            self.default_values[key] = value
 
     def get_default_value(self, param):
         """the value a parameter will get: what 'set default' asked for, then
@@ -12959,26 +12970,33 @@ class AskforCustomize(cmd.SmartQuestion):
 
     def set_parameter(self, args):
         """'set NAME 0', 'set NAME 1' and 'set NAME = OTHER' are the same as
-        set_zero/set_one/set_equal"""
+        set_zero/set_one/set_equal. NAME can also be 'BLOCK all'."""
 
-        name, value = args[0], args[1:]
+        keys, value = self.resolve_parameters(args)
+        if keys is None:
+            return
         if value and value[0] == '=':
             value = value[1:]
         if len(value) != 1:
             logger.warning('Invalid set command. For a parameter the syntax is:'
-                           ' set NAME 0 / set NAME 1 / set NAME = OTHERNAME')
+                ' set NAME 0 / set NAME 1 / set NAME = OTHERNAME (NAME can be '
+                '\'BLOCK all\' for the 0 and 1 forms)')
             return
         value = value[0]
         if value == '0':
-            self.do_set_zero(name)
+            self.apply_restriction(keys, 0)
         elif value == '1':
-            self.do_set_one(name)
+            self.apply_restriction(keys, 1)
         elif value.lower() in self.external_params:
-            self.do_set_equal('%s %s' % (name, value))
+            if len(keys) > 1:
+                logger.warning('A whole block can only be set to 0 or to 1, '
+                               'not to the value of another parameter.')
+                return
+            self.do_set_equal('%s %s' % (args[0], value))
         else:
             logger.warning('%s can only be set to 0, to 1 or to the value of '
                 'another external parameter (\'%s\' is not one of them).',
-                name, value)
+                args[0], value)
 
     #===========================================================================
     # customization of a single parameter/coupling
@@ -12998,35 +13016,71 @@ class AskforCustomize(cmd.SmartQuestion):
             return None
         return (param.lhablock, tuple(param.lhacode))
 
+    def get_block_parameters(self, name):
+        """the external parameters of a block of the param_card, None when name
+        is not one of its blocks"""
+
+        params = [param for param in self.external_params.values()
+                  if param.lhablock.lower() == name.lower()]
+        return params or None
+
+    def resolve_parameters(self, args):
+        """what a designation refers to, as a list of (lhablock, lhacode): the
+        name of a parameter, or 'BLOCK all' for every parameter of a block.
+        Return it with the arguments which are left."""
+
+        if not args:
+            return None, args
+        if len(args) >= 2 and args[1].lower() == 'all':
+            params = self.get_block_parameters(args[0])
+            if params is None:
+                logger.warning('%s is not a block of the param_card of this '
+                               'model.', args[0])
+                return None, args[2:]
+            return [(param.lhablock, tuple(param.lhacode))
+                    for param in params], args[2:]
+        key = self.get_external_parameter(args[0])
+        if key is None:
+            return None, args[1:]
+        return [key], args[1:]
+
+    def apply_restriction(self, keys, value):
+        """fix a list of parameters to zero or to one"""
+
+        for key in keys:
+            self.forget_parameter(key)
+            # forget_parameter rebinds the lists, so they are read back here
+            if value:
+                self.set_one.append(key)
+            else:
+                self.set_zero.append(key)
+        self.explain_change()
+
     def do_set_zero(self, line):
-        """set an external parameter of the model to zero"""
+        """set an external parameter -or a whole block- of the model to zero"""
 
         self.value = 'repeat'
-        args = line.split()
-        if len(args) != 1:
-            logger.warning('Invalid set_zero command. Syntax is: set_zero NAME')
+        keys, rest = self.resolve_parameters(line.split())
+        if keys is None:
             return
-        param = self.get_external_parameter(args[0])
-        if param is None:
+        if rest:
+            logger.warning('Invalid set_zero command. Syntax is: '
+                           'set_zero NAME | BLOCK all')
             return
-        self.forget_parameter(param)
-        self.set_zero.append(param)
-        self.explain_change()
+        self.apply_restriction(keys, 0)
 
     def do_set_one(self, line):
-        """set an external parameter of the model to one"""
+        """set an external parameter -or a whole block- of the model to one"""
 
         self.value = 'repeat'
-        args = line.split()
-        if len(args) != 1:
-            logger.warning('Invalid set_one command. Syntax is: set_one NAME')
+        keys, rest = self.resolve_parameters(line.split())
+        if keys is None:
             return
-        param = self.get_external_parameter(args[0])
-        if param is None:
+        if rest:
+            logger.warning('Invalid set_one command. Syntax is: '
+                           'set_one NAME | BLOCK all')
             return
-        self.forget_parameter(param)
-        self.set_one.append(param)
-        self.explain_change()
+        self.apply_restriction(keys, 1)
 
     def do_set_equal(self, line):
         """force an external parameter to take the value of another one"""
@@ -13431,11 +13485,24 @@ class AskforCustomize(cmd.SmartQuestion):
         fmt = lambda key: '%s (%s %s)' % (
                     MadGraphCmd.name_of_lha(self.lha2name, key).split(' ')[0],
                     key[0], list(key[1]))
-        current = []
-        for param in self.set_zero:
-            current.append('    %s = 0' % fmt(param))
-        for param in self.set_one:
-            current.append('    %s = 1' % fmt(param))
+
+        def lines_for(keys, value):
+            """one line per parameter, or 'BLOCK all' when a whole block is
+            concerned -- which is how the user typed it in the first place"""
+
+            by_block, out = {}, []
+            for key in keys:
+                by_block.setdefault(key[0], []).append(key)
+            for block, block_keys in by_block.items():
+                whole = self.get_block_parameters(block)
+                if whole and len(block_keys) == len(whole):
+                    out.append('    %s all = %s' % (block, value))
+                else:
+                    out += ['    %s = %s' % (fmt(key), value)
+                            for key in block_keys]
+            return out
+
+        current = lines_for(self.set_zero, 0) + lines_for(self.set_one, 1)
         for param, param2 in self.set_equal:
             current.append('    %s = %s' % (fmt(param), fmt(param2)))
         for name, expr in self.new_formula:
@@ -13452,8 +13519,11 @@ class AskforCustomize(cmd.SmartQuestion):
             question += 'default values: %s\n' % (
                 'the UFO model' if self.default_source == 'ufo'
                 else self.default_source or 'the model as it was loaded')
+            by_value = {}
             for key, value in self.default_values.items():
-                question += '    %s = %s\n' % (fmt(key), value)
+                by_value.setdefault(value, []).append(key)
+            for value in sorted(by_value):
+                question += '\n'.join(lines_for(by_value[value], value)) + '\n'
 
         question += 'For the other commands (set_equal, formula, coupling, display, clear),\n'
         question += 'or for scripting this function, please type: \'help\''
@@ -13486,9 +13556,14 @@ class AskforCustomize(cmd.SmartQuestion):
                             [n for n in names if n != param.name], line)
 
     def complete_set_zero(self, text, line, begidx, endidx):
-        """ Complete the set_zero command"""
+        """ Complete the set_zero command: a parameter, or a block and 'all'"""
         signal.alarm(0) # avoid timer if any
-        return self.list_completion(text,
+        args = self.split_arg(line[0:begidx])
+        if len(args) > 1:
+            return self.list_completion(text, ['all'], line)
+        blocks = sorted(set(param.lhablock
+                            for param in self.external_params.values()))
+        return self.list_completion(text, blocks +
                   [param.name for param in self.external_params.values()], line)
 
     complete_set_one = complete_set_zero
@@ -13564,6 +13639,8 @@ class AskforCustomize(cmd.SmartQuestion):
         print('On top of those options, the following commands are available:')
         print('   set_zero NAME          : set the external parameter NAME to zero')
         print('   set_one NAME           : set the external parameter NAME to one')
+        print('     NAME can be \'BLOCK all\' to act on a whole block of the')
+        print('     param_card: set_zero decay all, set CEFT all 0, ...')
         print('   set_equal NAME1 NAME2  : force NAME1 to take the value of NAME2')
         print('   clear                  : forget all those modifications')
         print('   display parameters [X] : the parameters of the model (all of')
@@ -13572,7 +13649,8 @@ class AskforCustomize(cmd.SmartQuestion):
         print('   you loaded. To change that:')
         print('   set default UFO        : take the values of the UFO instead')
         print('   set default PATH       : take them from that param_card')
-        print('   set default NAME VALUE : set the value of one parameter')
+        print('   set default NAME VALUE : set the value of one parameter, or of')
+        print('                            a whole block: set default CEFT all 0')
         print('   UFO and PATH start from scratch: they undo the \'set default\'')
         print('   entered before them. Those are values, not restrictions:')
         print('   use set_zero to remove a parameter from the model.')
@@ -13588,6 +13666,7 @@ class AskforCustomize(cmd.SmartQuestion):
         print('first argument is a parameter of the model:')
         print('   set NAME 0             same as set_zero NAME')
         print('   set NAME 1             same as set_one NAME')
+        print('   set BLOCK all 0        same as set_zero BLOCK all')
         print('   set NAME = OTHERNAME   same as set_equal NAME OTHERNAME')
         print('')
         print('The two following commands change a formula of the model. They can')

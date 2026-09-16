@@ -6,11 +6,9 @@ ANNOUNCEMENT:
 
 3.8.0 (XX/XX/XX):
    OM: 'customize_model' now works for every UFO model: generic options (flavour
-       scheme 3F/4F/5F, number of massive leptons, diagonal CKM), commands to set a
-       parameter to zero/one/to another one or to change a formula (writing a new UFO),
-       --explain to report what each choice removes, and --save also writes a
-       param_NAME.dat which propagates the values of the model you started from
-       ('set default UFO|PATH|NAME VALUE' chooses them otherwise).
+       scheme, massive leptons, diagonal CKM), commands to fix a parameter or a whole
+       block ('set decay all 0'), to change a formula, to choose the values written in
+       param_NAME.dat ('set default'), and --explain to say what each choice removes.
    OM: New command 'explain_restriction': report what a restriction card removes.
    OM: Bug fix custom files for cuts/scale/... were broken for NLO computation since 3.6.0
 
