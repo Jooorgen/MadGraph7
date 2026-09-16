@@ -1632,12 +1632,37 @@ class Cmd(CheckCmd, HelpCmd, CompleteCmd, BasicCmd):
         
 
 
+    def notify_failed_command(self, line):
+        """Hook: `line` raised instead of running.
+
+        Does nothing here. postcmd is not a substitute: it is skipped when a
+        command raises inside exec_cmd, and when it is reached -- the
+        interactive path -- it cannot tell a command that worked from one that
+        did not. The tutorial mode overrides this to say something instead of
+        leaving the user in front of a bare error message."""
+
+        pass
+
+    @staticmethod
+    def safe_notify_failed_command(interface, line):
+        """Tell `interface` that `line` raised, without ever replacing the
+        error the user is about to see by one of our own."""
+
+        notify = getattr(interface, 'notify_failed_command', None)
+        if notify is None:
+            return
+        try:
+            notify(line)
+        except Exception as error:
+            logger.debug('notify_failed_command failed: %s', error)
+
     def onecmd(self, line, **opt):
         """catch all error and stop properly command accordingly"""
            
         try:
             return self.onecmd_orig(line, **opt)
         except BaseException as error: 
+            Cmd.safe_notify_failed_command(self, line)
             return self.error_handling(error, line)
             
     
@@ -1674,9 +1699,16 @@ class Cmd(CheckCmd, HelpCmd, CompleteCmd, BasicCmd):
             if errorhandling or \
                 (hasattr(self, 'options') and 'crash_on_error' in self.options and 
                  self.options['crash_on_error']=='never'):
+                # onecmd catches the error itself, and has already told the hook
                 stop = current_interface.onecmd(line, **opt)
             else:
-                stop = Cmd.onecmd_orig(current_interface, line, **opt)
+                try:
+                    stop = Cmd.onecmd_orig(current_interface, line, **opt)
+                except BaseException:
+                    # the error goes up to whoever asked for the command, but
+                    # not before the interface is told: postcmd is skipped here
+                    Cmd.safe_notify_failed_command(current_interface, line)
+                    raise
             if postcmd:
                 stop = current_interface.postcmd(stop, line)
         finally:

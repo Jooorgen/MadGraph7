@@ -1607,3 +1607,75 @@ class TestRealRunNumbers(unittest.TestCase):
         self.assertIn('380.57(28)', text)
         self.assertIn('+26.6%', text)
         self.assertNotIn('503.1(1.4)', text)
+
+
+class TutorialFailedCommandTest(unittest.TestCase):
+    """A command which raises must not advance the tutorial, and must not
+    leave the user in front of an error message with the tutorial silent."""
+
+    class FakeBase(object):
+        def postcmd(self, stop, line):
+            return stop
+        def notify_failed_command(self, line):
+            pass
+
+    def interface(self, name='model'):
+        import madgraph.interface.tutorials as tutorials
+        from madgraph.interface.tutorials.mixin import TutorialMixin
+
+        class Fake(TutorialMixin, self.FakeBase):
+            pass
+
+        obj = Fake()
+        obj._tutorial_session = tutorials.start(name)
+        obj.exec_cmd_depth = 0
+        return obj
+
+    def test_a_failed_command_does_not_advance(self):
+        obj = self.interface()
+        session = obj._tutorial_session
+        for line in ['import model sm', 'display particles',
+                     'import model sm-no_b_mass', 'set gauge Feynman']:
+            obj.postcmd(None, line)
+        here = session.index
+
+        obj.notify_failed_command('check gauge')   # needs a process: it raised
+        obj.postcmd(None, 'check gauge')           # the interactive path
+        self.assertEqual(session.index, here)
+
+        # and the command the step waits for is still accepted afterwards
+        obj.postcmd(None, 'define v = w+ w- z a')
+        self.assertEqual(session.current.title, 'multiparticle labels')
+
+    def test_a_successful_command_still_advances(self):
+        obj = self.interface()
+        session = obj._tutorial_session
+        obj.postcmd(None, 'import model sm')
+        self.assertEqual(session.current.title, 'load a model')
+
+    def test_only_the_first_report(self):
+        """a script command fails, and the 'import' running it fails in turn"""
+
+        obj = self.interface()
+        obj.notify_failed_command('check gauge')
+        self.assertEqual(obj._tutorial_failed_line, 'check gauge')
+        obj.notify_failed_command('import /tmp/script.txt')
+        self.assertEqual(obj._tutorial_failed_line, 'check gauge')
+
+    def test_nothing_happens_without_a_tutorial(self):
+        obj = self.interface()
+        obj._tutorial_session = None
+        obj.notify_failed_command('check gauge')
+        self.assertEqual(getattr(obj, '_tutorial_failed_line', None), None)
+
+    def test_the_hook_never_masks_the_real_error(self):
+        """a failure inside the tutorial must not replace the user's error"""
+
+        from madgraph.interface.extended_cmd import Cmd
+
+        class Broken(object):
+            def notify_failed_command(self, line):
+                raise RuntimeError('tutorial is broken')
+
+        Cmd.safe_notify_failed_command(Broken(), 'anything')  # must not raise
+        Cmd.safe_notify_failed_command(object(), 'anything')  # no hook at all

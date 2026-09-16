@@ -59,6 +59,39 @@ class TutorialMixin(object):
 
     # -- the hook that advances the tutorial ----------------------------------
 
+    def notify_failed_command(self, line):
+        """The user's command raised instead of running.
+
+        Say so and repeat what the tutorial is waiting for: the alternative is
+        an error message followed by silence, which reads as if the tutorial
+        had stopped working. The step is *not* advanced -- the command did not
+        do what the lesson asked -- and the line is remembered so that postcmd,
+        which the interactive path still reaches afterwards, does not advance
+        it either.
+        """
+
+        super(TutorialMixin, self).notify_failed_command(line)
+
+        session = getattr(self, '_tutorial_session', None)
+        if session is None or getattr(self, 'exec_cmd_depth', 0) > 0:
+            return
+        if getattr(self, '_tutorial_failed_line', None) is not None:
+            # a command of a script failed, and the 'import' which was running
+            # it fails in turn: one report is enough
+            return
+        self._tutorial_failed_line = line
+
+        expected = None
+        step = session.next_step
+        if step is not None:
+            expected = step.get_solution(self)
+
+        text = 'That command did not run, so the tutorial stays where it is.'
+        if expected:
+            text += '\nIt is still waiting for:\n  %s' % expected
+        text += "\nType `hint` for a hint, or `tutorial stop` to leave."
+        emit(text)
+
     def postcmd(self, stop, line):
         stop = super(TutorialMixin, self).postcmd(stop, line)
         if stop is False:
@@ -67,6 +100,14 @@ class TutorialMixin(object):
         session = getattr(self, '_tutorial_session', None)
         if session is None:
             return stop
+
+        # the command raised: notify_failed_command has already spoken, and a
+        # step must not be advanced by a command which did not run
+        failed = getattr(self, '_tutorial_failed_line', None)
+        if failed is not None:
+            self._tutorial_failed_line = None
+            if failed == line:
+                return stop
 
         # Only react to what the user actually typed.  MG5 runs plenty of
         # commands for itself -- importing a model issues half a dozen 'define'
