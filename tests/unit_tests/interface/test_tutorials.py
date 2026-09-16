@@ -1387,6 +1387,87 @@ class TestTerminalStyling(unittest.TestCase):
 
 
 #===============================================================================
+# the process lines a tutorial proposes have to exist in the model it runs on
+#===============================================================================
+
+class TestProposedProcessesAreValid(unittest.TestCase):
+    """Every particle a tutorial tells the user to type must be in its model.
+
+    `syntax` and `lo` run on the plain SM, so a process line quoting a charged
+    Higgs -- as the alternative-s-channel lesson once did -- is a command the
+    reader cannot run.  Only the particle names are checked here: the rest of
+    the line (orders, `[QCD]`, decay chains) is the tutorial's own subject and
+    is exercised by the exercises tutorial.
+    """
+
+    SM_TUTORIALS = ('syntax', 'lo')
+
+    # a proposed command: after the prompt, or indented in an example block
+    COMMAND = re.compile(r'^\s*(?:MG7>\s*)?(generate|add process)\s+(.*)$')
+
+    @classmethod
+    def setUpClass(cls):
+        import madgraph.interface.master_interface as master
+        cls.interface = master.MasterCmd()
+        cls.interface.exec_cmd('import model sm', printcmd=False)
+
+    def proposals(self, tutorial):
+        """(step title, command) for every process line the steps quote."""
+
+        out = []
+        for step in tutorial.steps:
+            for line in (step.render(self.interface) or '').splitlines():
+                found = self.COMMAND.match(line)
+                if found:
+                    out.append((step.title, found.group(2).strip()))
+            solution = step.get_solution()
+            found = solution and self.COMMAND.match(solution)
+            if found:
+                out.append((step.title, found.group(2).strip()))
+        return out
+
+    @staticmethod
+    def particle_names(process):
+        """The particle names in a process line, orders and operators dropped."""
+
+        # the example blocks align a comment after the command, two spaces or
+        # more from it: 'generate p p > t t~     initial state, `>`, ...'
+        process = re.split(r'\s{2,}', process)[0]
+        process = process.split('[')[0]                  # [QCD] and friends
+        process = re.sub(r'\{[^}]*\}', '', process)       # {0}, {T} ...
+        process = re.sub(r'[(),]', ' ', process)          # decay chains
+        names = []
+        for token in process.split():
+            if token in ('>', '|', '/', '$', '$$') or token.startswith('@'):
+                continue
+            if '=' in token or '^' in token:             # a coupling order
+                continue
+            names.append(token)
+        return names
+
+    def test_every_proposed_process_is_in_the_sm(self):
+        for name in self.SM_TUTORIALS:
+            tutorial = tutorials.get(name)
+            self.assertIsNotNone(tutorial, '%s is not registered' % name)
+            for title, process in self.proposals(tutorial):
+                for particle in self.particle_names(process):
+                    try:
+                        self.interface.extract_particle_ids([particle])
+                    except madgraph.InvalidCmd:
+                        self.fail('%s / %s proposes %r, but %r is not in the '
+                                  'SM' % (name, title, process, particle))
+
+    def test_the_check_would_have_caught_the_charged_higgs(self):
+        """The guard is only worth having if it fires -- this is the line that
+        used to sit in the alternative-s-channel lesson."""
+
+        names = self.particle_names('b b~ > W+ W- | H+ H- > ta+ vt ta- vt~')
+        self.assertIn('H+', names)
+        self.assertRaises(madgraph.InvalidCmd,
+                          self.interface.extract_particle_ids, ['H+'])
+
+
+#===============================================================================
 # menu sections and provenance
 #===============================================================================
 
@@ -1845,8 +1926,9 @@ class StickyStepTest(unittest.TestCase):
         self.assertTrue('syntax' in note)
         # and that tutorial does exist, and does teach it
         self.assertNotEqual(tutorials.get('syntax'), None)
-        self.assertTrue('coupling orders' in
-                        [s.title for s in tutorials.get('syntax').steps])
+        self.assertTrue(any('coupling orders' in s.title
+                            for s in tutorials.get('syntax').steps),
+                        'the syntax tutorial no longer has an orders lesson')
 
     def test_an_unknown_display_still_answers(self):
         import madgraph.interface.tutorials.model as model

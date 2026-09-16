@@ -589,3 +589,37 @@ class CheckDisplayWithoutProcessTest(unittest.TestCase):
     def test_it_accepts_a_generated_process(self):
         self.cmd.do_generate('e+ e- > mu+ mu-')
         self.cmd.check_display(['processes'])   # must not raise
+
+
+class RequiredSChannelErrorTest(unittest.TestCase):
+    """A bad required s-channel has to be reported for what it is.
+
+    extract_process asks extract_particle_ids for the required s-channels with
+    crash_on_duplication, and used to turn *any* InvalidCmd coming back into a
+    message about the '> A A >' syntax -- so an unknown particle name in that
+    position was reported as a syntax that the user had not used.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.cmd = cmd.MasterCmd()
+        cls.cmd.do_import('model sm')
+
+    def error_of(self, process):
+        try:
+            self.cmd.extract_process(process)
+        except madgraph.InvalidCmd as error:
+            return str(error)
+        self.fail('%r was accepted' % process)
+
+    def test_an_unknown_particle_says_so(self):
+        message = self.error_of('b b~ > w+ w- | h+ h- > ta+ vt ta- vt~')
+        self.assertIn('h+', message)
+        self.assertNotIn('A A', message)
+
+    def test_a_repeated_one_still_reports_the_syntax(self):
+        message = self.error_of('p p > z z > e+ e- mu+ mu-')
+        self.assertIn('A A', message)
+
+    def test_a_good_one_is_accepted(self):
+        self.cmd.extract_process('p p > z | a > e+ e-')   # must not raise

@@ -21,8 +21,7 @@ command-name -> text lookup could not express.
 
 from __future__ import absolute_import
 
-from madgraph.interface.tutorials.session import (Step, Tutorial,
-                                                  describe_applied_orders)
+from madgraph.interface.tutorials.session import Step, Tutorial
 
 P = 'MG7>'
 
@@ -35,48 +34,42 @@ tutorial = Tutorial(
     steps=[
 
 Step('tutorial', """
-This tutorial walks through the syntax of the `generate` command: everything
-you can put in a process line, one idea at a time.
+This tutorial is about the process line itself: everything you can put after
+`generate`, one idea at a time. It picks up where `tutorial lo` leaves off,
+and it stays there -- nothing here is output or run, these are process lines
+only.
+
+What that tutorial already showed, in three lines:
+
+  generate p p > t t~     initial state, `>`, final state; the spaces matter
+  p  j  l+  l-  vl        multiparticle labels (`display multiparticles`)
+  no orders given         MG5 searches for coupling orders and applies its own
+
+The last one is the habit worth breaking, because a search is not a statement
+of physics. Say the orders yourself:
+%(p)s generate p p > t t~ QED=2
 
 Each step asks you to type a command. Type it and the next lesson appears. If
 you are stuck, `hint` and `solution` print what is expected -- they never run
 it for you. `skip` moves on, `repeat` prints the step again, and
 `tutorial status` shows how far you have got. `tutorial help` lists the lot.
-
-Let's start with the simplest possible process:
-%(p)s generate p p > t t~
-
-`p` is a multiparticle label -- a shorthand for a set of particles. Type
-`display multiparticles` at any point to see what `p`, `j`, `l+` and `l-`
-stand for.
 """ % {'p': P},
      title='welcome',
-     solution='generate p p > t t~'),
+     hint="`tutorial lo` is the one that starts from nothing; this one starts "
+          "from the process line.",
+     solution='generate p p > t t~ QED=2'),
 
-Step('generate', lambda interface: """
-Read what MG5 printed back. You gave it no coupling orders, so it chose some
-for you.
+Step('generate', """
+That `QED=2` constrains the *amplitude*: at most two QED vertices per diagram.
+The whole family reads
 
-%(orders)s
-
-Either way it is the first thing to make explicit when a result surprises you.
-
-Coupling orders are constraints on the *amplitude*:
   QED=0    at most 0 QED vertices     ('=' means '<=' -- this trips people up)
   QED==0   exactly 0 QED vertices
   QED<=2   at most 2
   QED>2    more than 2
 
-Ask for the electroweak diagrams back:
-%(p)s generate p p > t t~ QED=2
+and every one of them counts vertices in the diagram.
 
-Compare the diagram count with what you got a moment ago.
-""" % {'p': P, 'orders': describe_applied_orders(interface)},
-     title='coupling orders',
-     hint="Orders go at the end of the process line, after the final state.",
-     solution='generate p p > t t~ QED=2'),
-
-Step('generate', """
 Now the one people get wrong.
 
 A constraint with `^2` applies to the *squared* matrix element, not to the
@@ -103,7 +96,7 @@ Three things to know before you use this in anger:
  * the `check` command does not accept the `^2` syntax, so do not reach for
    `check` to validate an interference process.
 """ % {'p': P},
-     title='interference only',
+     title='coupling orders: amplitude and squared',
      hint="'^2' makes the constraint apply to the squared matrix element.",
      solution='generate p p > j j QCD^2==2 QED^2==2'),
 
@@ -114,9 +107,13 @@ particle are kept.
 %(p)s generate p p > w+ > l+ vl
 
 Alternative s-channels are separated by `|`, which is how you keep an
-interfering pair together:
+interfering pair together -- the Z/photon pair being the everyday case:
 
-  generate b b~ > W+ W- | H+ H- > ta+ vt ta- vt~
+  generate p p > z | a > e+ e-
+
+Several particles on one side of the `|` are required together, so a
+two-per-side form asks for one pair or the other. They have to be distinct
+names: `> z z >` is refused rather than quietly read as `> z >`.
 
 Try the required-s-channel form:
 %(p)s generate p p > w+ > l+ vl

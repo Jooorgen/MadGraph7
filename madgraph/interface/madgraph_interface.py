@@ -124,6 +124,16 @@ logger_tuto = logging.getLogger('tutorial') # -> stdout include instruction in
 logger_tuto_nlo = logging.getLogger('tutorial_aMCatNLO') # deprecated, unused
 logger_tuto_madloop = logging.getLogger('tutorial_MadLoop') # deprecated, unused
 
+class DuplicateParticle(madgraph.InvalidCmd):
+    """A particle name given twice where only one is meaningful.
+
+    Its own class because the caller that asks for it (the required s-channel
+    list) turns it into a message about the "> A A >" syntax, and must not
+    turn any *other* InvalidCmd -- an unknown particle name, say -- into that
+    same misleading message.
+    """
+
+
 # Central definition of the main interface prompt (bold blue "MG7> ")
 MG7_PROMPT = "\001\033[1;94m\002MG7> \001\033[0m\002"
 # the same prompt without the colour escapes, for quoting commands inside
@@ -6190,7 +6200,7 @@ This implies that with decay chains:
             try:
                 required_schannel_ids = \
                                self.extract_particle_ids(required_schannels, crash_on_duplication=True)
-            except self.InvalidCmd:
+            except DuplicateParticle:
                 raise self.InvalidCmd("Invalid \"> A A >\" syntax. In old version of MadGraph7, this was allowed but incorectly intrepreted as \"> A >\".")
 
             if required_schannel_ids and not \
@@ -6533,7 +6543,7 @@ This implies that with decay chains:
                 test = [set_dict.setdefault(i,i) for i in idlist \
                             if i not in set_dict]
                 if len(test) != len(idlist):
-                    raise self.InvalidCmd('Particle can not be duplicate')  
+                    raise DuplicateParticle('Particle can not be duplicate')
 
         if len(res_lists) == 1:
             res_lists = res_lists[0]
