@@ -1397,34 +1397,49 @@ class TestMenuSections(unittest.TestCase):
     def sections(self):
         return list(tutorials.by_section())
 
-    def test_the_order_is_basic_advanced_exercises(self):
+    def named(self, key):
+        for section_key, _title, group, notice in self.sections():
+            if section_key == key:
+                return [t.name for t in group], notice
+        self.fail('no %s section' % key)
+
+    def test_the_order_is_basic_advanced_more_exercises(self):
         keys = [key for key, _title, _group, _notice in self.sections()]
-        self.assertEqual(keys, ['basic', 'advanced', 'exercises'])
+        self.assertEqual(keys, ['basic', 'advanced', 'more', 'exercises'])
 
     def test_basic_is_lo_and_nlo(self):
-        for key, _title, group, _notice in self.sections():
-            if key == 'basic':
-                self.assertEqual([t.name for t in group], ['lo', 'nlo'])
-                return
-        self.fail('no basic section')
+        self.assertEqual(self.named('basic')[0], ['lo', 'nlo'])
+
+    def test_advanced_is_the_validated_ones(self):
+        """'advanced' is the developer-validated group, not 'everything that
+        is not basic' -- which is what it used to collect by default."""
+
+        self.assertEqual(sorted(self.named('advanced')[0]),
+                         ['madloop', 'model'])
 
     def test_exercises_is_its_own_section(self):
-        for key, _title, group, _notice in self.sections():
-            if key == 'exercises':
-                self.assertIn('exercises', [t.name for t in group])
-                return
-        self.fail('no exercises section')
+        self.assertIn('exercises', self.named('exercises')[0])
 
-    def test_basic_carries_no_ai_notice(self):
-        for key, _title, _group, notice in self.sections():
-            if key == 'basic':
-                self.assertIsNone(notice, 'the Basic section is flagged')
+    def test_basic_and_advanced_say_they_are_validated(self):
+        for key in ('basic', 'advanced'):
+            notice = self.named(key)[1]
+            self.assertEqual(notice, tutorials.VALIDATED_NOTICE,
+                             '%s does not claim validation' % key)
 
-    def test_advanced_and_exercises_carry_it(self):
-        for key, _title, _group, notice in self.sections():
-            if key in ('advanced', 'exercises'):
-                self.assertIsNotNone(notice, '%s is not flagged' % key)
-                self.assertIn('not yet validated', notice)
+    def test_more_and_exercises_carry_the_ai_notice(self):
+        for key in ('more', 'exercises'):
+            notice = self.named(key)[1]
+            self.assertIn('not yet validated', notice,
+                          '%s is not flagged' % key)
+
+    def test_every_tutorial_in_a_validated_section_is_validated(self):
+        for key, title, group, _notice in self.sections():
+            if key not in Tutorial.VALIDATED_SECTIONS:
+                continue
+            for tutorial in group:
+                self.assertFalse(tutorial.ai_generated,
+                                 '%s is AI-generated but sits under %s'
+                                 % (tutorial.name, title))
 
     def test_the_ported_tutorials_are_not_called_ai_generated(self):
         """nlo and madloop are the pre-2026 text, near verbatim."""
@@ -1436,6 +1451,22 @@ class TestMenuSections(unittest.TestCase):
     def test_an_unknown_section_is_refused(self):
         self.assertRaises(ValueError, Tutorial, name='x', title='x',
                           steps=[], section='nonsense')
+
+    def test_an_ai_tutorial_cannot_claim_a_validated_section(self):
+        """The heading promises validation, so the promise is enforced here
+        rather than left to whoever adds the next tutorial."""
+
+        for key in Tutorial.VALIDATED_SECTIONS:
+            self.assertRaises(ValueError, Tutorial, name='x', title='x',
+                              steps=[], section=key, ai_generated=True)
+            Tutorial(name='x', title='x', steps=[], section=key,
+                     ai_generated=False)
+
+    def test_the_default_section_is_not_a_validated_one(self):
+        """A new tutorial has to opt in to the validated groups."""
+
+        self.assertNotIn(Tutorial(name='x', title='x', steps=[]).section,
+                         Tutorial.VALIDATED_SECTIONS)
 
 
 #===============================================================================
