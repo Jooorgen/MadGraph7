@@ -1403,7 +1403,8 @@ class TestProposedProcessesAreValid(unittest.TestCase):
     SM_TUTORIALS = ('syntax', 'lo')
 
     # a proposed command: after the prompt, or indented in an example block
-    COMMAND = re.compile(r'^\s*(?:MG7>\s*)?(generate|add process)\s+(.*)$')
+    COMMAND = re.compile(
+        r'^\s*(?:MG7>\s*)?(?:generate|add process|check +\w+)\s+(.*)$')
 
     @classmethod
     def setUpClass(cls):
@@ -1419,11 +1420,11 @@ class TestProposedProcessesAreValid(unittest.TestCase):
             for line in (step.render(self.interface) or '').splitlines():
                 found = self.COMMAND.match(line)
                 if found:
-                    out.append((step.title, found.group(2).strip()))
+                    out.append((step.title, found.group(1).strip()))
             solution = step.get_solution()
             found = solution and self.COMMAND.match(solution)
             if found:
-                out.append((step.title, found.group(2).strip()))
+                out.append((step.title, found.group(1).strip()))
         return out
 
     @staticmethod

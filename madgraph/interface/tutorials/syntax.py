@@ -29,7 +29,7 @@ P = 'MG7>'
 tutorial = Tutorial(
     name='syntax',
     title='the process generation syntax',
-    description='orders, interference, s-channels, decay chains, polarisation, NLO',
+    description='orders, interference, decay chains, s-channels, gauge traps, NLO',
     order='sequence',
     steps=[
 
@@ -101,47 +101,6 @@ Three things to know before you use this in anger:
      solution='generate p p > j j QCD^2==2 QED^2==2'),
 
 Step('generate', """
-A second `>` names a required s-channel: only diagrams going through that
-particle are kept.
-
-%(p)s generate p p > w+ > l+ vl
-
-Alternative s-channels are separated by `|`, which is how you keep an
-interfering pair together -- the Z/photon pair being the everyday case:
-
-  generate p p > z | a > e+ e-
-
-Several particles on one side of the `|` are required together, so a
-two-per-side form asks for one pair or the other. They have to be distinct
-names: `> z z >` is refused rather than quietly read as `> z >`.
-
-Try the required-s-channel form:
-%(p)s generate p p > w+ > l+ vl
-""" % {'p': P},
-     title='required s-channels',
-     hint="Put the intermediate particle between two '>'.",
-     solution='generate p p > w+ > l+ vl'),
-
-Step('generate', """
-The mirror image: excluding things. Three different operators, and the
-difference matters.
-
-  $   exclude the ON-SHELL contribution of an s-channel particle; the diagram
-      is kept but the resonance is removed. Gauge-safe.
-  $$  forbid that s-channel entirely -- the diagram is dropped. This breaks
-      gauge invariance in general, so use it only when you know why.
-  /   forbid a particle ANYWHERE in the diagram, internal or external.
-
-%(p)s generate p p > e+ e- / a
-
-Then try `generate p p > e+ e- $ a` and `generate p p > e+ e- $$ a` and
-compare the diagram counts -- the contrast is the lesson.
-""" % {'p': P},
-     title='excluding particles and s-channels',
-     hint="'/ a' forbids the photon everywhere; '$ a' only removes it on shell.",
-     solution='generate p p > e+ e- / a'),
-
-Step('generate', """
 A comma opens a decay chain. Everything after it decays a particle of the
 process before it, and parentheses nest.
 
@@ -157,10 +116,80 @@ Two things to keep in mind:
 
 MadSpin is the run-time alternative: it decays events after generation and
 keeps spin correlations, without multiplying the number of diagrams.
+
+This is also the *safe* way to ask for a resonance. Production and decay are
+each a complete set of diagrams, so each is gauge invariant on its own, and
+the approximation you are making is a stated one: on shell, times a branching
+ratio. The next two lessons do a similar-looking job by reaching inside a
+single amplitude, and that is where it gets delicate.
 """ % {'p': P},
      title='decay chains',
      hint="Use ',' to open the decay, and parentheses to nest a second one.",
      solution='generate p p > t t~, (t > w+ b, w+ > l+ vl), t~ > w- b~'),
+
+Step('generate', """
+Now the operators that reach inside one amplitude and keep part of it.
+
+A second `>` names a required s-channel: only diagrams going through that
+particle are kept.
+
+%(p)s generate p p > w+ > l+ vl
+
+Alternative s-channels are separated by `|`, which is how you keep an
+interfering pair together -- the Z/photon pair being the everyday case:
+
+  generate p p > z | a > e+ e-
+
+Several particles on one side of the `|` are required together, so a
+two-per-side form asks for one pair or the other. They have to be distinct
+names: `> z z >` is refused rather than quietly read as `> z >`.
+
+**Read this before you use it.** A single Feynman diagram is not an
+observable. Only the complete set for an amplitude is gauge invariant, and the
+cancellations between diagrams can be enormous. Keep some and drop the rest
+and the answer may depend on the gauge it was computed in -- which means it is
+not a prediction of anything.
+
+Sometimes the subset you kept is a complete gauge-invariant set by itself and
+all is well: photon versus Z exchange in `u u~ > e+ e-` is the textbook case.
+Sometimes it is not, and nothing in the output tells you which you are in.
+`check gauge` does, and the next lesson runs it.
+""" % {'p': P},
+     title='required s-channels',
+     hint="Put the intermediate particle between two '>'.",
+     solution='generate p p > w+ > l+ vl'),
+
+Step('generate', """
+The mirror image: excluding things. Three operators, and the difference
+between them is exactly the gauge question from the last lesson.
+
+  $   exclude the ON-SHELL contribution of an s-channel particle. The diagram
+      is KEPT and only the resonance peak is subtracted, so this one is safe
+      by construction.
+  $$  forbid that s-channel entirely -- the diagram is dropped.
+  /   forbid a particle ANYWHERE in the diagram, internal or external.
+
+%(p)s generate p p > e+ e- / a
+
+Then try `generate p p > e+ e- $ a` and `generate p p > e+ e- $$ a` and
+compare the diagram counts -- the contrast is the lesson.
+
+`$$` and `/` delete diagrams, so they carry the same warning as `> A >` above.
+Worth running once, so that you have watched it happen:
+
+  check gauge e+ e- > w+ w-           passes
+  check gauge e+ e- > w+ w- $$ a      FAILS
+  check gauge e+ e- > a > w+ w-       FAILS
+
+Dropping the photon from W pair production leaves a matrix element several
+times the full one, and destroys the cancellation that keeps it from growing
+with energy. `check gauge` computes the same thing in four gauges and compares
+them; `tutorial checks` is the one that goes through it. (`check` needs a model
+imported, which `generate` does for you but `check` does not.)
+""" % {'p': P},
+     title='excluding particles and s-channels',
+     hint="'/ a' forbids the photon everywhere; '$ a' only removes it on shell.",
+     solution='generate p p > e+ e- / a'),
 
 Step('generate', """
 `add process` puts a second process in the same output, and `@N` tags it so
