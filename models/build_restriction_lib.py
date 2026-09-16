@@ -315,6 +315,75 @@ def get_lepton_scheme_option(model, reference):
                         description=description)
 
 
+def get_ckm_rules(model):
+    """the (lhablock, lhacode, value) which make the quark mixing matrix
+    diagonal, for the parameterisations a SM-like model uses. Empty if this
+    model does not follow any of them."""
+
+    blocks = {}
+    for param in get_external_parameters(model):
+        blocks.setdefault(param.lhablock.lower(), []).append(param)
+
+    # the Wolfenstein parameterisation (sm, loop_sm and everything built on
+    # them): lambda = A = rho = eta = 0 is the identity matrix
+    if 'wolfenstein' in blocks:
+        return [(param.lhablock, list(param.lhacode), 0.0)
+                for param in blocks['wolfenstein']
+                if len(param.lhacode) == 1 and param.lhacode[0] in [1, 2, 3, 4]]
+
+    for name in sorted(blocks):
+        if 'ckm' not in name:
+            continue
+        params = blocks[name]
+        # the matrix itself (VCKM of the SLHA2 convention, CKMBLOCK, ...)
+        if all(len(param.lhacode) == 2 for param in params):
+            return [(param.lhablock, list(param.lhacode),
+                     1.0 if param.lhacode[0] == param.lhacode[1] else 0.0)
+                    for param in params]
+        # a single mixing angle (the Cabibbo angle of the 2 generation models)
+        if len(params) == 1 and len(params[0].lhacode) == 1:
+            return [(params[0].lhablock, list(params[0].lhacode), 0.0)]
+
+    return []
+
+
+def is_already_applied(model, rules):
+    """check if a set of rules is already satisfied by model. A parameter which
+    is not in the param_card of model anymore was necessarily fixed by the
+    restriction it was loaded with."""
+
+    by_lha = dict(((param.lhablock.lower(), tuple(param.lhacode)), param)
+                  for param in get_external_parameters(model))
+    values = dict.get(model, 'parameter_dict', {})
+
+    for lhablock, lhacode, value in rules:
+        param = by_lha.get((lhablock.lower(), tuple(lhacode)), None)
+        if param is None:
+            continue # not a parameter of that model anymore: already fixed
+        try:
+            current = complex(values.get(param.name, param.value))
+        except (TypeError, ValueError):
+            return False
+        if abs(current - value) > 1e-10:
+            return False
+    return True
+
+
+def get_ckm_category(model, reference):
+    """the 'diagonal ckm' option, for the models which follow one of the
+    conventions of the SM for the quark mixing"""
+
+    rules = get_ckm_rules(model)
+    if not rules:
+        return None
+
+    category = Category('quark mixing')
+    category.add_options(name='diagonal ckm',
+                         default=is_already_applied(reference, rules),
+                         rules=rules)
+    return category
+
+
 def get_generic_categories(model, reference=None):
     """return the list of the categories proposed for any model.
     model is the (unrestricted) model on which the restriction is applied,
@@ -324,15 +393,21 @@ def get_generic_categories(model, reference=None):
     if reference is None:
         reference = model
 
+    categories = []
+
     category = Category('mass scheme')
     for option in [get_flavour_scheme_option(model, reference),
                    get_lepton_scheme_option(model, reference)]:
         if option is not None:
             category.append(option)
+    if category:
+        categories.append(category)
 
-    if not category:
-        return []
-    return [category]
+    category = get_ckm_category(model, reference)
+    if category is not None:
+        categories.append(category)
+
+    return categories
 
 
 def get_rules_target(option):

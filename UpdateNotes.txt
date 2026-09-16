@@ -13,6 +13,11 @@ ANNOUNCEMENT:
           Both are always proposed, but only with the values the model can
           actually take: a UFO where the c quark has no mass parameter is
           offered 4F and 5F only, and is told why 3F is missing.
+        - a diagonal CKM, for the models which follow one of the conventions of
+          the SM for the quark mixing: the Wolfenstein parameterisation, the
+          matrix itself (VCKM of SLHA2, CKMBLOCK, ...) or a single Cabibbo
+          angle. It used to be available for the sm only, through its
+          build_restrict.py,
         - 'set_zero NAME'/'set_one NAME' to fix an external parameter to zero/one,
         - 'set_equal NAME1 NAME2' to force a parameter to the value of another one,
           The 'set' command is a shortcut for the three of them when its first

@@ -284,7 +284,7 @@ class TestModelCategories(unittest.TestCase):
         self.assertEqual([o[0].name for o in options], ['one', 'two'])
 
     def test_sm_options(self):
-        """the mass options of the sm are superseded by the generic ones"""
+        """every option of the sm is now one of the generic ones"""
 
         categories = self.cmd.get_customize_categories(self.full_model,
                                                        self.default_model)
@@ -292,11 +292,27 @@ class TestModelCategories(unittest.TestCase):
                                                              if option.first]
         self.assertTrue('flavour scheme' in names)
         self.assertTrue('nb of massive leptons' in names)
-        # the only option of the sm which is not about a mass
         self.assertTrue('diagonal ckm' in names)
-        for dropped in ['c mass = 0', 'b mass = 0', 'tau mass = 0',
-                        'muon mass = 0', 'electron mass = 0']:
-            self.assertFalse(dropped in names)
+        # ... so all of them are dropped from the build_restrict.py of the
+        # model, and the generic ones are the only ones left
+        self.assertEqual(sorted(names), ['diagonal ckm', 'flavour scheme',
+                                         'nb of massive leptons'])
+        # each of them is proposed once: an option which is superseded by a
+        # generic one must not be kept next to it
+        self.assertEqual(len(names), len(set(names)))
+
+    def test_sm_ckm_comes_from_the_generic_option(self):
+        """the sm declares a 'diagonal ckm' too: only one of them is kept"""
+
+        categories = self.cmd.get_customize_categories(self.full_model,
+                                                       self.default_model)
+        ckm = [category for category in categories
+                        if category.name == 'quark mixing']
+        self.assertEqual(len(ckm), 1)
+        self.assertEqual(set((rule.lhablock, tuple(rule.lhaid))
+                             for rule in ckm[0]),
+                         set([('wolfenstein', (1,)), ('wolfenstein', (2,)),
+                              ('wolfenstein', (3,)), ('wolfenstein', (4,))]))
 
 
 #===============================================================================
@@ -812,3 +828,86 @@ class TestExplainModes(unittest.TestCase):
         explain = ([None] + [mg_interface.parse_explain_mode(a) for a in args
                              if mg_interface.parse_explain_mode(a)])[-1]
         self.assertEqual(explain, 'final')
+
+
+#===============================================================================
+# the generic 'diagonal ckm' option
+#===============================================================================
+class ParamModel(dict):
+    """a model with only external parameters, enough for the options which are
+    derived from the blocks of the param_card"""
+
+    def __init__(self, params):
+        """params: (name, lhablock, lhacode, value)"""
+
+        external, values = [], {}
+        for name, lhablock, lhacode, value in params:
+            param = FakeParam(name, lhablock, lhacode)
+            param.value = value
+            external.append(param)
+            values[name] = value
+        dict.__init__(self, {'particle_dict': {},
+                             'parameters': {('external',): external},
+                             'parameter_dict': values})
+
+    def get(self, name):
+        return self[name]
+
+
+class TestCKMRules(unittest.TestCase):
+    """The parameterisations of the quark mixing a SM-like model can use"""
+
+    def test_wolfenstein(self):
+        model = ParamModel([('lamWS', 'Wolfenstein', [1], 0.2253),
+                            ('AWS', 'Wolfenstein', [2], 0.808),
+                            ('rhoWS', 'Wolfenstein', [3], 0.132),
+                            ('etaWS', 'Wolfenstein', [4], 0.341),
+                            ('MZ', 'MASS', [23], 91.188)])
+        self.assertEqual(build_restrict_lib.get_ckm_rules(model),
+                         [('Wolfenstein', [1], 0.0), ('Wolfenstein', [2], 0.0),
+                          ('Wolfenstein', [3], 0.0), ('Wolfenstein', [4], 0.0)])
+
+    def test_ckm_matrix(self):
+        """the SLHA2 convention: the matrix itself, 1 on the diagonal"""
+
+        model = ParamModel([('RCKM1x1', 'VCKM', [1, 1], 1.0),
+                            ('RCKM1x2', 'VCKM', [1, 2], 0.2253),
+                            ('RCKM2x1', 'VCKM', [2, 1], -0.2253),
+                            ('RCKM2x2', 'VCKM', [2, 2], 1.0)])
+        self.assertEqual(sorted(build_restrict_lib.get_ckm_rules(model)),
+                         sorted([('VCKM', [1, 1], 1.0), ('VCKM', [1, 2], 0.0),
+                                 ('VCKM', [2, 1], 0.0), ('VCKM', [2, 2], 1.0)]))
+
+    def test_cabibbo_angle(self):
+        """the 2 generation models give a single mixing angle"""
+
+        model = ParamModel([('cabi', 'CKMBLOCK', [1], 0.2277)])
+        self.assertEqual(build_restrict_lib.get_ckm_rules(model),
+                         [('CKMBLOCK', [1], 0.0)])
+
+    def test_a_model_without_quark_mixing(self):
+        model = ParamModel([('MZ', 'MASS', [23], 91.188)])
+        self.assertEqual(build_restrict_lib.get_ckm_rules(model), [])
+        self.assertEqual(build_restrict_lib.get_ckm_category(model, model), None)
+
+    def test_default_follows_the_loaded_model(self):
+        """the option starts checked when the model already has it applied"""
+
+        mixing = ParamModel([('lamWS', 'Wolfenstein', [1], 0.2253)])
+        diagonal = ParamModel([('lamWS', 'Wolfenstein', [1], 0.0)])
+        rules = build_restrict_lib.get_ckm_rules(mixing)
+        self.assertEqual(build_restrict_lib.is_already_applied(mixing, rules), False)
+        self.assertEqual(build_restrict_lib.is_already_applied(diagonal, rules), True)
+
+        category = build_restrict_lib.get_ckm_category(mixing, diagonal)
+        self.assertEqual(category.name, 'quark mixing')
+        self.assertEqual([rule.name for rule in category], ['diagonal ckm'])
+        self.assertEqual(category[0].status, True)
+
+    def test_a_removed_parameter_counts_as_applied(self):
+        """a parameter which is not in the param_card anymore was fixed by the
+        restriction the model was loaded with"""
+
+        rules = [('Wolfenstein', [1], 0.0)]
+        self.assertEqual(build_restrict_lib.is_already_applied(
+                                    ParamModel([]), rules), True)
