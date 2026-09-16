@@ -1750,6 +1750,32 @@ class StickyStepTest(unittest.TestCase):
             session.advance(session.step_for(line)[0])
         self.assertEqual(session.step_for('display particles'), None)
 
+    def test_explain_restriction_is_answered_too(self):
+        """the lesson names the command, so the user will try it"""
+
+        session = self.session()
+        for line in ['import model sm', 'display particles',
+                     'import model sm-no_b_mass']:
+            session.advance(session.step_for(line)[0])
+
+        for line in ['explain_restriction', 'explain_restriction sm-full',
+                     'explain_restriction --all']:
+            index, step = session.step_for(line)
+            self.assertEqual(step.title, 'a detour: explain_restriction', line)
+            self.assertEqual(step.sticky, True)
+        # the lesson is untouched and still continues
+        self.assertEqual(session.current.title, 'restrictions')
+        self.assertEqual(session.step_for('set gauge Feynman')[1].title,
+                         'gauge and scheme')
+
+    def test_explain_restriction_works_from_the_first_import(self):
+        """the import of a restricted model suggests it right away"""
+
+        session = self.session()
+        session.advance(session.step_for('import model sm')[0])
+        index, step = session.step_for('explain_restriction')
+        self.assertEqual(step.title, 'a detour: explain_restriction')
+
     def test_each_display_has_its_own_note(self):
         import madgraph.interface.tutorials.model as model
 

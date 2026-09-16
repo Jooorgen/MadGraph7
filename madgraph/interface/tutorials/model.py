@@ -210,6 +210,32 @@ Next, how the model is *treated* rather than what is in it:
      hint="Append `-RESTRICTION` to the model name.",
      solution='set gauge Feynman'),
 
+Step('explain_restriction', """
+That report is the restriction card read back, one entry at a time.
+
+Each line is one thing the card fixes -- a parameter set to zero or to one, or
+a family it gives a common value -- followed by what that entry *on its own*
+takes out of the model. `dropped` counts the couplings which then evaluate to
+zero, so the vertices needing them go; `fused` counts the ones which become
+equal to another and are merged into a single coupling.
+
+Two things are worth noticing in it. Setting a mass to zero often drops no
+coupling at all -- a mass lives in the propagator, the Yukawa of the same
+particle is the one sitting in the vertices. And a coupling can be listed under
+two entries: either of them alone is enough to kill it, which the closing line
+counts.
+
+`explain_restriction --all` names every coupling instead of the first few, and
+`explain_restriction sm-full` works on any card, not only the one you loaded.
+
+Back to the tutorial:
+%(p)s set gauge Feynman
+""" % {'p': P},
+     title='a detour: explain_restriction',
+     sticky=True,
+     hint="`explain_restriction` reports on the card the model was loaded with.",
+     solution='set gauge Feynman'),
+
 Step('set', """
 `set gauge` chooses the gauge for the non-QCD part, and reloads the model:
 
