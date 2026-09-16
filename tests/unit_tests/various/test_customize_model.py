@@ -694,3 +694,76 @@ class TestSetEqualCompletion(unittest.TestCase):
 
     def test_second_argument_of_an_unknown_parameter(self):
         self.assertEqual(self.complete('set_equal NotAParameter '), [])
+
+
+#===============================================================================
+# 'set' as a shortcut for set_zero/set_one/set_equal
+#===============================================================================
+class TestSetShortcut(unittest.TestCase):
+    """'set yt 0', 'set yt 1' and 'set yt = yb' are the short forms"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.full_model = import_ufo.import_full_model(
+                                            import_ufo.find_ufo_path('sm'))
+
+    def setUp(self):
+        self.cmd = mg_interface.MadGraphCmd()
+        self.cmd._curr_model = self.full_model
+        self.ask = mg_interface.AskforCustomize('', mother_interface=self.cmd,
+            categories=self.cmd.get_customize_categories(self.full_model,
+                                                         self.full_model))
+
+    def test_set_to_zero_and_one(self):
+        self.ask.do_set('ymb 0')
+        self.assertEqual(self.ask.set_zero, [('YUKAWA', (5,))])
+        self.ask.do_set('ymt 1')
+        self.assertEqual(self.ask.set_one, [('YUKAWA', (6,))])
+
+    def test_set_equal_spacing(self):
+        """'=' may be glued to either side, or stand alone"""
+
+        for line in ['ymb = ymt', 'ymb= ymt', 'ymb =ymt', 'ymb=ymt']:
+            self.ask.do_clear('')
+            self.ask.do_set(line)
+            self.assertEqual(self.ask.set_equal,
+                             [(('YUKAWA', (5,)), ('YUKAWA', (6,)))], line)
+
+    def test_set_equal_without_the_equal_sign(self):
+        self.ask.do_set('ymb ymt')
+        self.assertEqual(self.ask.set_equal,
+                         [(('YUKAWA', (5,)), ('YUKAWA', (6,)))])
+
+    def test_the_options_still_win(self):
+        """an option of the question is not a parameter"""
+
+        self.ask.do_set('diagonalckm False')
+        self.assertEqual(get_option(self.ask.all_categories, 'diagonal ckm').status,
+                         False)
+        self.assertEqual(self.ask.set_zero, [])
+
+    def test_refused_values(self):
+        """only 0, 1 and another external parameter make sense"""
+
+        self.ask.do_set('ymb 2')
+        self.ask.do_set('ymb = NotAParameter')
+        self.ask.do_set('NotAParameter 0')
+        self.assertEqual(self.ask.set_zero, [])
+        self.assertEqual(self.ask.set_one, [])
+        self.assertEqual(self.ask.set_equal, [])
+
+    def test_an_internal_parameter_is_refused(self):
+        """'yt' is internal in the sm: it is not in the param_card"""
+
+        self.ask.do_set('yt 0')
+        self.assertEqual(self.ask.set_zero, [])
+
+    def test_completion_of_a_parameter(self):
+        """the second argument of 'set MB' is 0, 1 or a mass it can merge with"""
+
+        out = self.ask.complete_set('', 'set MB ', 7, 7)
+        self.assertTrue('0' in out)
+        self.assertTrue('1' in out)
+        self.assertTrue('MT' in out)
+        self.assertFalse('MB' in out)
+        self.assertFalse('ymb' in out)

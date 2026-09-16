@@ -15,6 +15,8 @@ ANNOUNCEMENT:
           offered 4F and 5F only, and is told why 3F is missing.
         - 'set_zero NAME'/'set_one NAME' to fix an external parameter to zero/one,
         - 'set_equal NAME1 NAME2' to force a parameter to the value of another one,
+          The 'set' command is a shortcut for the three of them when its first
+          argument is a parameter: 'set yt 0', 'set yt 1', 'set yt = yb'.
         - 'formula NAME = EXPR' to turn an external parameter into an internal one
           and 'coupling NAME = EXPR' to change the definition of a coupling. Since
           those two can not be stored in a restriction card, they write a new UFO
@@ -35,7 +37,10 @@ ANNOUNCEMENT:
        per choice with that choice -and only that one- applied, so it reads
        values only and can not change the resulting model. Each choice is
        reported as soon as it is evaluated, since on a large model every one of
-       them is a full evaluation of the couplings.
+       them is a full evaluation of the couplings. On top of that report, each
+       command entered at the question is followed by what it changed (couplings
+       dropped/fused, parameters restricted), so the effect of a choice is seen
+       while the model is being customized and not only at the end.
        Fix as well 'customize_model' being unusable from a script (the answer to the
        question was not returned to the command) and the resulting model not being
        flavour-grouped/multiparticle-refreshed as 'import model NAME-restriction' is.

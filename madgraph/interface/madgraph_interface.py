@@ -8722,6 +8722,14 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
         return options
 
     @staticmethod
+    def get_full_param_card(model):
+        """the param_card of a model, with the default value of every parameter"""
+
+        out_path = io.StringIO()
+        param_writer.ParamCardWriter(model, out_path)
+        return check_param_card.ParamCard(out_path.getvalue().split('\n'))
+
+    @staticmethod
     def get_external_lhacode(model):
         """the (lhablock, lhacode) of all the external parameters of a model"""
 
@@ -9047,7 +9055,7 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
         return removed, modified
 
     def explain_restriction(self, model_path, default_card, externals, groups,
-                                    categories, set_zero, set_one, set_equal):
+                            categories, set_zero, set_one, set_equal, base=None):
         """Report what each of the user choices does to the couplings of the
         model: which ones it drops and which ones it fuses with another.
 
@@ -9059,7 +9067,8 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
 
         # done before the header so that the (noisy) log of the model import
         # does not land in the middle of the report
-        base = model_reader.ModelReader(
+        if base is None:
+            base = model_reader.ModelReader(
                         import_ufo.import_model(model_path, restrict=False))
         logger.info('Restriction report: analysing %d choice(s), one '
                     'evaluation of the couplings each', len(groups))
@@ -9136,8 +9145,8 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
         if fused:
             logger.info('  %-38s   fused:   %s', '', self.short_list(fused))
         if params:
-            logger.info('  %-38s   %d parameter(s) leave the param_card', '',
-                        len(params))
+            logger.info('  %-38s   %d parameter(s) restricted (set to 0/1 '
+                        'or merged)', '', len(params))
 
     @staticmethod
     def short_list(names, nb=8):
@@ -9180,8 +9189,15 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
         categories = self.get_customize_categories(self._curr_model,
                                                    reference_model)
 
+        explainer = None
+        if explain:
+            explainer = RestrictionExplainer(self, model_path,
+                self.get_full_param_card(self._curr_model),
+                self.get_external_lhacode(self._curr_model), categories)
+
         ask_instance = self.ask('', '0', [], ask_class=AskforCustomize,
-                                categories=categories, return_instance=True)[1]
+                                categories=categories, explainer=explainer,
+                                return_instance=True)[1]
 
         set_zero = ask_instance.set_zero
         set_one = ask_instance.set_one
@@ -9205,9 +9221,7 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
                     old_externals - self.get_external_lhacode(self._curr_model))
 
         # the values of the model, used to restore the non restricted parameters
-        out_path = io.StringIO()
-        param_writer.ParamCardWriter(self._curr_model, out_path)
-        default_card = check_param_card.ParamCard(out_path.getvalue().split('\n'))
+        default_card = self.get_full_param_card(self._curr_model)
 
         logger.info('Loading the resulting model')
         externals = self.get_external_lhacode(self._curr_model)
@@ -9220,7 +9234,8 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
                                           set_equal, ask_instance.lha2name)
             try:
                 self.explain_restriction(model_path, default_card, externals,
-                        groups, categories, set_zero, set_one, set_equal)
+                        groups, categories, set_zero, set_one, set_equal,
+                        base=explainer.model if explainer else None)
             except Exception as error:
                 # the report is informative only: never let it break the command
                 logger.warning('Could not build the restriction report: %s', error)
@@ -12240,6 +12255,94 @@ _launch_parser.add_option("", "--nb_run", default=1, type='int',
 #===============================================================================
 # Interface for customize question.
 #===============================================================================
+class RestrictionExplainer(object):
+    """Evaluates the couplings/parameters of a model for the choices made so
+    far at the customize_model question and reports what changed since the
+    previous call, so that 'customize_model --explain' gives a live feedback
+    after each command instead of only a report at the end.
+
+    It only reads values (one evaluation of the couplings per call): it can not
+    change the model which is being built."""
+
+    def __init__(self, cmd, model_path, default_card, externals, categories):
+
+        self.cmd = cmd
+        self.externals = externals
+        self.model = model_reader.ModelReader(
+                        import_ufo.import_model(model_path, restrict=False))
+        # the values which would be simplified by accident are randomized, as
+        # they are for the real restriction
+        self.unrestricted = check_param_card.ParamCard(default_card)
+        cmd.randomize_param_card(self.unrestricted, externals)
+
+        # the starting point is the question as it opens, i.e. the default
+        # value of the options, not the unrestricted model
+        self.state = self.evaluate(self.apply(categories, [], [], []))
+        logger.info('Default choices of this model: %d coupling(s) dropped, '
+                    '%d fused, %d parameter(s) restricted.'
+                    '\n  Each command will report what it changes.',
+                    *[len(entries) for entries in self.state])
+
+    def apply(self, categories, set_zero, set_one, set_equal):
+        """the param_card for the choices made so far"""
+
+        param_card = check_param_card.ParamCard(self.unrestricted)
+        self.cmd.apply_customize_rules(param_card, categories, set_zero,
+                        set_one, self.cmd.resolve_set_equal(set_equal))
+        return param_card
+
+    def evaluate(self, param_card):
+        """(dropped couplings, fused couplings, parameters leaving the card)"""
+
+        zero, fused = self.cmd.get_coupling_classes(self.model, param_card)
+        dropped, merged = self.cmd.get_parameter_classes(param_card,
+                                                         self.externals)
+        return zero, fused, dropped | merged
+
+    def update(self, categories, set_zero, set_one, set_equal, lha2name=None):
+        """evaluate the choices made so far and log what the last command
+        changed"""
+
+        new = self.evaluate(self.apply(categories, set_zero, set_one, set_equal))
+        self.report(self.state, new, lha2name or {})
+        self.state = new
+
+    def report(self, old, new, lha2name):
+        """the difference between two states, in plain words"""
+
+        old_zero, old_fused, old_param = old
+        new_zero, new_fused, new_param = new
+
+        def name(key):
+            if not isinstance(key, tuple):
+                return str(key)
+            return lha2name.get(key, None) or \
+                   lha2name.get((key[0].upper(), key[1]), '%s %s' % (key[0],
+                                                              list(key[1])))
+
+        changes = [('+', new_zero - old_zero, 'coupling(s) dropped'),
+                   ('-', old_zero - new_zero, 'coupling(s) back in the model'),
+                   ('+', new_fused - old_fused, 'coupling(s) fused'),
+                   # a coupling which is now dropped is not 'fused' anymore:
+                   # reporting it a second time would only be confusing
+                   ('-', (old_fused - new_fused) - new_zero,
+                    'coupling(s) not fused anymore'),
+                   ('+', new_param - old_param,
+                    'parameter(s) restricted (set to 0/1 or merged)'),
+                   ('-', old_param - new_param,
+                    'parameter(s) free again')]
+
+        changed = False
+        for sign, entries, title in changes:
+            if not entries:
+                continue
+            changed = True
+            logger.info('  %s%d %s: %s', sign, len(entries), title,
+                        self.cmd.short_list([name(key) for key in entries]))
+        if not changed:
+            logger.info('  no change on the couplings/parameters of the model')
+
+
 class AskforModelName(cmd.SmartQuestion):
     """Ask for a (free text) model name. The only reason for this class to
     exist is that a question with no pre-defined answer is otherwise not
@@ -12295,6 +12398,8 @@ class AskforCustomize(cmd.SmartQuestion):
         self.new_coupling = []# [(coupling name, expression)]
         self.formula_target = {} # parameter name -> (lhablock, lhacode)
         self._identifiable = None # cache for the set_equal completion
+        # customize_model --explain: report each command as it is entered
+        self.explainer = opt.pop('explainer', None)
 
         question = self.get_question()
         # determine the possible value and how they are linked to the restriction
@@ -12349,6 +12454,7 @@ class AskforCustomize(cmd.SmartQuestion):
             else:
                 option.status = not option.status
             self.value = 'repeat'
+            self.explain_change()
         else:
             self.value = line
 
@@ -12360,18 +12466,33 @@ class AskforCustomize(cmd.SmartQuestion):
         cmd.SmartQuestion.reask(self, reprint_opt)
 
     def do_set(self, line):
-        """ """
+        """set one of the options of the question, or -when the first argument
+        is a parameter of the model- a shortcut for the set_zero/set_one/
+        set_equal commands: 'set yt 0', 'set yt 1', 'set yt = yb'"""
+
         self.value = 'repeat'
 
-        args = line.split()
+        # 'set yt = yb', 'set yt= yb' and 'set yt=yb' are the same thing
+        args = re.sub(r'\s*=\s*', ' = ', line).split()
         if not args:
             logger.warning('Invalid set command. Syntax is: set NAME VALUE')
             return
-        if args[0] not in self.name2options:
-            logger.warning('Invalid set command. %s not recognize options. Valid options are: \n  %s' %
-                           (args[0], ', '.join(list(self.name2options.keys())) ))
-            return
-        elif len(args) != 2:
+
+        if args[0] in self.name2options:
+            return self.set_option(args)
+        if args[0].lower() in self.external_params or \
+                                    args[0].lower() in self.internal_params:
+            return self.set_parameter(args)
+
+        logger.warning('Invalid set command: %s is neither one of the options '
+                       'nor a parameter of the model.\n  Valid options are: %s',
+                       args[0], ', '.join(x for x in self.name2options
+                                                        if not x.isdigit()))
+
+    def set_option(self, args):
+        """set NAME VALUE where NAME is one of the options of the question"""
+
+        if len(args) != 2:
             logger.warning('Invalid set command. Not correct number of argument')
             return
 
@@ -12381,6 +12502,8 @@ class AskforCustomize(cmd.SmartQuestion):
                 option.set_status(args[1])
             except ValueError as error:
                 logger.warning(str(error))
+            else:
+                self.explain_change()
             return
 
         if args[1] in ['True','1','.true.','T',1,True,'true','TRUE']:
@@ -12389,6 +12512,31 @@ class AskforCustomize(cmd.SmartQuestion):
             option.status = False
         else:
             logger.warning('%s is not True/False. Didn\'t do anything.' % args[1])
+            return
+        self.explain_change()
+
+    def set_parameter(self, args):
+        """'set NAME 0', 'set NAME 1' and 'set NAME = OTHER' are the same as
+        set_zero/set_one/set_equal"""
+
+        name, value = args[0], args[1:]
+        if value and value[0] == '=':
+            value = value[1:]
+        if len(value) != 1:
+            logger.warning('Invalid set command. For a parameter the syntax is:'
+                           ' set NAME 0 / set NAME 1 / set NAME = OTHERNAME')
+            return
+        value = value[0]
+        if value == '0':
+            self.do_set_zero(name)
+        elif value == '1':
+            self.do_set_one(name)
+        elif value.lower() in self.external_params:
+            self.do_set_equal('%s %s' % (name, value))
+        else:
+            logger.warning('%s can only be set to 0, to 1 or to the value of '
+                'another external parameter (\'%s\' is not one of them).',
+                name, value)
 
     #===========================================================================
     # customization of a single parameter/coupling
@@ -12421,6 +12569,7 @@ class AskforCustomize(cmd.SmartQuestion):
             return
         self.forget_parameter(param)
         self.set_zero.append(param)
+        self.explain_change()
 
     def do_set_one(self, line):
         """set an external parameter of the model to one"""
@@ -12435,6 +12584,7 @@ class AskforCustomize(cmd.SmartQuestion):
             return
         self.forget_parameter(param)
         self.set_one.append(param)
+        self.explain_change()
 
     def do_set_equal(self, line):
         """force an external parameter to take the value of another one"""
@@ -12463,6 +12613,7 @@ class AskforCustomize(cmd.SmartQuestion):
                 args[0], args[1])
         self.forget_parameter(param)
         self.set_equal.append((param, param2))
+        self.explain_change()
 
     def do_formula(self, line):
         """define an external parameter as a formula of other parameters.
@@ -12493,6 +12644,7 @@ class AskforCustomize(cmd.SmartQuestion):
         self.new_formula = [(n, e) for (n, e) in self.new_formula if n != name]
         self.formula_target[name] = param
         self.new_formula.append((name, expr))
+        self.warn_not_explained()
 
     def do_coupling(self, line):
         """change the definition of one of the coupling of the model.
@@ -12513,6 +12665,7 @@ class AskforCustomize(cmd.SmartQuestion):
         name = self.ufo_couplings[name.lower()].name
         self.new_coupling = [(n, e) for (n, e) in self.new_coupling if n != name]
         self.new_coupling.append((name, expr))
+        self.warn_not_explained()
 
     @staticmethod
     def get_variables(expr):
@@ -12527,6 +12680,27 @@ class AskforCustomize(cmd.SmartQuestion):
                 continue
             out.append(variable.lower())
         return out
+
+    def warn_not_explained(self):
+        """formula/coupling change the model itself, not the values written in
+        the restriction card, so --explain can not evaluate them here"""
+
+        if self.explainer is not None:
+            logger.info('  the effect of that command can only be seen once the '
+                        'new model is written (it is not a restriction)')
+
+    def explain_change(self):
+        """with --explain, report what the command which just ran changed"""
+
+        if self.explainer is None:
+            return
+        try:
+            self.explainer.update(self.all_categories, self.set_zero,
+                            self.set_one, self.set_equal, self.lha2name)
+        except Exception as error:
+            # informative only: a failure here must not stop the customization
+            logger.warning('Could not report the effect of that command: %s',
+                           error)
 
     def forget_parameter(self, param):
         """remove any previous customization of a given parameter"""
@@ -12549,6 +12723,7 @@ class AskforCustomize(cmd.SmartQuestion):
         self.new_formula = []
         self.new_coupling = []
         self.formula_target = {}
+        self.explain_change()
 
     def get_question(self):
         """define the current question."""
@@ -12598,13 +12773,25 @@ class AskforCustomize(cmd.SmartQuestion):
         args = self.split_arg(line[0:begidx])
 
         if len(args) == 1:
+            # an option of the question, or a parameter ('set MB 0')
             possibilities = [x for x in self.name2options if not x.isdigit()]
+            possibilities += [param.name
+                              for param in self.external_params.values()]
             return self.list_completion(text, possibilities, line)
-        else:
-            option = self.name2options.get(args[1], None)
-            if isinstance(option, build_restrict_lib.ChoiceOption):
-                return self.list_completion(text, option.labels, line)
-            return self.list_completion(text,['True', 'False'], line)
+
+        option = self.name2options.get(args[1], None)
+        if isinstance(option, build_restrict_lib.ChoiceOption):
+            return self.list_completion(text, option.labels, line)
+        elif option is not None:
+            return self.list_completion(text, ['True', 'False'], line)
+
+        param = self.external_params.get(args[1].lower(), None)
+        if param is None:
+            return []
+        # 0, 1, or one of the parameters it can really be merged with
+        names = self.get_identifiable().get(param.lhablock.lower(), [])
+        return self.list_completion(text, ['0', '1'] +
+                            [n for n in names if n != param.name], line)
 
     def complete_set_zero(self, text, line, begidx, endidx):
         """ Complete the set_zero command"""
@@ -12686,6 +12873,12 @@ class AskforCustomize(cmd.SmartQuestion):
         print('   set_one NAME           : set the external parameter NAME to one')
         print('   set_equal NAME1 NAME2  : force NAME1 to take the value of NAME2')
         print('   clear                  : forget all those modifications')
+        print('')
+        print('The \'set\' command is a shortcut for the three of them when its')
+        print('first argument is a parameter of the model:')
+        print('   set NAME 0             same as set_zero NAME')
+        print('   set NAME 1             same as set_one NAME')
+        print('   set NAME = OTHERNAME   same as set_equal NAME OTHERNAME')
         print('')
         print('The two following commands change a formula of the model. They can')
         print('not be stored in a restriction card, so a new UFO model is written')
