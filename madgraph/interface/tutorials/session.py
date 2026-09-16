@@ -30,6 +30,8 @@ Nothing here talks to the interface; the mixin does that.
 
 from __future__ import absolute_import
 
+import inspect
+
 import os
 
 
@@ -65,10 +67,19 @@ class Step(object):
               not run" line.  For the command a lesson invites the user to try
               and which needs an argument they have no reason to guess.  May be
               a callable(interface) -> str.
+    sticky    the step answers a command without consuming the lesson: its text
+              is printed and the session stays where it is, so the same step
+              can answer again.  For a lesson which invites the user to try
+              several commands -- `display particles`, `display interactions`,
+              ... -- none of which is the one it is waiting for.  A sticky step
+              has to sit *before* any later step sharing its key, since
+              step_for scans forward from the current position and would
+              otherwise jump the user to that one.
     """
 
     def __init__(self, key, text, hint=None, solution=None, requires=None,
-                 setup=None, title=None, question_hint=None, on_failure=None):
+                 setup=None, title=None, question_hint=None, on_failure=None,
+                 sticky=False):
         self.key = key
         self.text = text
         self.hint = hint
@@ -78,6 +89,7 @@ class Step(object):
         self.title = title
         self.question_hint = question_hint
         self.on_failure = on_failure
+        self.sticky = sticky
 
     def get_failure_advice(self, interface=None):
         """What to say when a command meant for this step did not run."""
@@ -89,12 +101,23 @@ class Step(object):
                 return None
         return self.on_failure
 
-    def render(self, interface=None):
-        """The text to print for this step."""
+    def render(self, interface=None, line=None):
+        """The text to print for this step.
 
-        if callable(self.text):
-            return self.text(interface)
-        return self.text
+        A callable text takes the interface, and the command line too when it
+        declares a second argument -- which a sticky step needs, since what it
+        has to say depends on which command the user tried.
+        """
+
+        if not callable(self.text):
+            return self.text
+        try:
+            nb_args = len(inspect.signature(self.text).parameters)
+        except (TypeError, ValueError):
+            nb_args = 1
+        if nb_args > 1:
+            return self.text(interface, line)
+        return self.text(interface)
 
     def get_solution(self, interface=None):
         """The command this step is waiting for, resolved against the session.

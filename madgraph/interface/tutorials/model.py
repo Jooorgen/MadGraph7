@@ -27,6 +27,78 @@ from madgraph.interface.tutorials.session import Step, Tutorial
 P = 'MG7>'
 
 
+# ---------------------------------------------------------------------------
+# The lesson above lists half a dozen `display` commands and invites the user
+# to try them.  Each one has something worth saying -- how to narrow it down,
+# which convention the output follows -- and none of them is the command the
+# tutorial is waiting for, so this step answers and stays put.
+# ---------------------------------------------------------------------------
+
+DISPLAY_NOTES = {
+
+'particles': """Every particle of the model, with its PDG code.
+
+The names are the MG5 ones: `ta-` for the tau, `vt` for its neutrino, a
+trailing `~` for an antiparticle. That translation is what `--modelname`
+switches off, and the names it maps to live in `input/default_particle.dat`.
+
+One particle at a time gives you its mass, width, spin and colour:
+  display particles t""",
+
+'interactions': """Every vertex of the model -- several hundred of them for the
+SM, which is rarely what you want.
+
+Ask for the ones you care about instead, by particle:
+  display interactions t t~ g
+or for a single one by number, as they are numbered in that listing:
+  display interactions 12""",
+
+'couplings': """The couplings as MG5 built them, grouped by what they depend on.
+
+One at a time, by name, shows the definition it came from in the UFO:
+  display couplings GC_12""",
+
+'parameters': """The parameters the couplings are built from: the external ones
+-- the entries of the param_card -- first, then everything derived from them.
+
+This one has no filter: it prints the lot. `display couplings GC_12` is the
+way in when you are chasing where a number comes from.""",
+
+'multiparticles': """The labels that stand for a set of particles.
+
+`p`, `j`, `l+`, `l-`, `vl` and `vl~` come predefined -- that is why `p p > j j`
+means what it means -- and `p`/`j` follow the flavour scheme of the model, so
+they will change under you when the b becomes massless in a moment.
+
+You will add your own with `define` later in this tutorial.""",
+
+'modellist': """The models MG7 can download for you, which is many more than
+the handful shipped in `models/`. `import model NAME` fetches one on demand.""",
+
+'coupling_order': """The coupling orders the model declares -- QCD, QED and
+whatever else it defines -- with the hierarchy MG5 uses to decide what a
+process means when you do not spell the orders out.""",
+
+'lorentz': """The Lorentz structures the vertices are built from.
+`display lorentz NAME` shows one of them.""",
+}
+
+
+def display_note(interface, line):
+    """What to say about the `display` the user just tried."""
+
+    args = (line or '').split()
+    what = args[1].lower() if len(args) > 1 else ''
+    note = DISPLAY_NOTES.get(what)
+    if note is None:
+        note = ("`display %s` is not one of the things this lesson lists; "
+                "`help display` has the full set." % what if what else
+                "`display` needs to be told what to show -- `display particles`, "
+                "`display interactions`, ... -- see `help display`.")
+    return '%s\n\nWhen you have seen enough, carry on with:\n%s import model sm-no_b_mass' \
+           % (note, P)
+
+
 tutorial = Tutorial(
     name='model',
     title='working with models',
@@ -97,6 +169,12 @@ diagrams that contribute nothing. Load a different restriction and compare:
 """ % {'p': P},
      title='look inside the model',
      hint="`display particles`, `display interactions`, `display parameters`.",
+     solution='import model sm-no_b_mass'),
+
+Step(('display', 'display_multiparticles'), display_note,
+     title='trying the display commands',
+     sticky=True,
+     hint="`display particles`, `display interactions t t~ g`, ...",
      solution='import model sm-no_b_mass'),
 
 Step('import_model', """
@@ -191,7 +269,7 @@ See them all, including the one you just made:
      hint="`define LABEL = particle particle ...`",
      solution='display multiparticles'),
 
-Step('display', lambda interface: """
+Step('display_multiparticles', lambda interface: """
 Three more things, worth knowing they exist:
 
   * **`customize_model`** opens an interactive menu of the switches a model

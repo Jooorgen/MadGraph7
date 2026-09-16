@@ -1697,3 +1697,85 @@ class TutorialFailedCommandTest(unittest.TestCase):
 
         Cmd.safe_notify_failed_command(Broken(), 'anything')  # must not raise
         Cmd.safe_notify_failed_command(object(), 'anything')  # no hook at all
+
+
+class StickyStepTest(unittest.TestCase):
+    """A lesson which invites the user to try several commands must answer them
+    without being consumed, and without jumping to a later step that happens to
+    share the key."""
+
+    def session(self):
+        import madgraph.interface.tutorials as tutorials
+        return tutorials.start('model')
+
+    def at_the_display_lesson(self):
+        session = self.session()
+        for line in ['import model sm', 'display particles']:
+            session.advance(session.step_for(line)[0])
+        self.assertEqual(session.current.title, 'look inside the model')
+        return session
+
+    def test_a_display_does_not_end_the_tutorial(self):
+        """'display multiparticles' used to match the closing step"""
+
+        session = self.at_the_display_lesson()
+        for line in ['display multiparticles', 'display interactions',
+                     'display couplings', 'display modellist']:
+            index, step = session.step_for(line)
+            self.assertEqual(step.title, 'trying the display commands', line)
+            self.assertEqual(step.sticky, True)
+            # sticky: the mixin renders it and does not advance
+            self.assertEqual(session.current.title, 'look inside the model')
+
+    def test_the_lesson_still_continues(self):
+        session = self.at_the_display_lesson()
+        index, step = session.step_for('import model sm-no_b_mass')
+        self.assertEqual(step.title, 'restrictions')
+
+    def test_the_closing_step_is_still_reachable(self):
+        session = self.session()
+        for line in ['import model sm', 'display particles',
+                     'import model sm-no_b_mass', 'set gauge Feynman',
+                     'define v = w+ w- z a']:
+            session.advance(session.step_for(line)[0])
+        index, step = session.step_for('display multiparticles')
+        self.assertEqual(step.title, 'customise, merge, save')
+
+    def test_a_later_display_does_not_end_it_either(self):
+        """the closing step only answers the command it asks for"""
+
+        session = self.session()
+        for line in ['import model sm', 'display particles',
+                     'import model sm-no_b_mass']:
+            session.advance(session.step_for(line)[0])
+        self.assertEqual(session.step_for('display particles'), None)
+
+    def test_each_display_has_its_own_note(self):
+        import madgraph.interface.tutorials.model as model
+
+        for what in ['particles', 'interactions', 'couplings', 'parameters',
+                     'multiparticles', 'modellist', 'coupling_order']:
+            note = model.display_note(None, 'display %s' % what)
+            self.assertTrue(note, what)
+            # every one of them hands the user back to the tutorial
+            self.assertTrue('import model sm-no_b_mass' in note, what)
+
+    def test_an_unknown_display_still_answers(self):
+        import madgraph.interface.tutorials.model as model
+
+        self.assertTrue('import model sm-no_b_mass' in
+                        model.display_note(None, 'display nonsense'))
+        self.assertTrue('import model sm-no_b_mass' in
+                        model.display_note(None, 'display'))
+
+    def test_render_passes_the_line(self):
+        """a sticky step's text takes the command, an ordinary one does not"""
+
+        import madgraph.interface.tutorials as tutorials
+
+        steps = tutorials.get('model').steps
+        sticky = [s for s in steps if s.sticky][0]
+        self.assertTrue('interactions' in
+                        sticky.render(None, 'display interactions'))
+        plain = [s for s in steps if s.title == 'customise, merge, save'][0]
+        self.assertTrue(plain.render(None, 'display multiparticles'))

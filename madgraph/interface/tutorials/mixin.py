@@ -140,6 +140,12 @@ class TutorialMixin(object):
         if step.setup:
             step.setup(self)
 
+        if step.sticky:
+            # answers the command without consuming the lesson: the session
+            # stays where it is, so the next one is answered too
+            emit(step.render(self, line))
+            return stop
+
         if isinstance(step, Exercise):
             passed, message = step.evaluate(self, line)
             if not passed:
