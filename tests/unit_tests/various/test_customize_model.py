@@ -1309,14 +1309,21 @@ class TestSetDefault(unittest.TestCase):
         self.ask.do_set('default MT = 171')
         self.assertEqual(self.value_of('mt'), 171.)
 
-    def test_ufo_resets_everything(self):
+    def test_ufo_only_replaces_the_card(self):
+        """'set default UFO' undoes 'set default PATH', and nothing else: a
+        parameter the user set by hand is their choice, not the card's"""
+
         self.ask.do_set('default %s' % self.card)
         self.ask.do_set('default MH = 130')
         self.ask.do_set('default UFO')
         self.assertEqual(self.ask.default_card, None)
-        self.assertEqual(self.ask.default_values, {})
-        self.assertEqual(self.value_of('mt'), 172.)
-        self.assertEqual(self.value_of('mh'), 125.)
+        self.assertEqual(self.value_of('mt'), 172.)   # the card is gone
+        self.assertEqual(self.value_of('mh'), 130.)   # that one is not
+
+    def test_a_card_does_not_undo_a_parameter_either(self):
+        self.ask.do_set('default MH = 130')
+        self.ask.do_set('default %s' % self.card)
+        self.assertEqual(self.value_of('mh'), 130.)
 
     def test_refused_inputs(self):
         self.ask.do_set('default /not/a/file.dat')

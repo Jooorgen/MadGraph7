@@ -12834,9 +12834,10 @@ class AskforCustomize(cmd.SmartQuestion):
 
         if len(args) == 1:
             if args[0].lower() == 'ufo':
+                # only the card this replaces: the parameters the user set one
+                # by one are their own choice, not something this undoes
                 self.default_card = None
                 self.default_card_values = None
-                self.default_values = {}
                 logger.info('Default values taken from the UFO model.')
                 return
             if not os.path.isfile(args[0]):
@@ -13488,9 +13489,12 @@ class AskforCustomize(cmd.SmartQuestion):
         print('   clear                  : forget all those modifications')
         print('   display parameters [X] : the parameters of the model (all of')
         print('                            them, or the block/names matching X)')
-        print('   set default UFO        : take the values of the model (default)')
+        print('   set default UFO        : take the values of the model (default).')
+        print('                            Only replaces a card given before,')
+        print('                            it does not undo a NAME VALUE below')
         print('   set default PATH       : take them from that param_card')
-        print('   set default NAME VALUE : set the value of one parameter.')
+        print('   set default NAME VALUE : set the value of one parameter,')
+        print('                            whatever the two commands above say.')
         print('                            Those are values, not restrictions:')
         print('                            use set_zero to remove a parameter.')
         print('   display couplings [X]  : the couplings, with their expression.')
