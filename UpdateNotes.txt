@@ -49,6 +49,12 @@ ANNOUNCEMENT:
        while the model is being customized rather than only at the end. Both
        reports are framed by a banner and coloured, so that they stand out of
        the log of the model imports they sit in the middle of.
+   OM: Importing a restricted model now suggests 'explain_restriction' instead of
+       telling to set the stdout_level to DEBUG so that the details of the import
+       are written into a log file.
+   OM: models/loop_sm/restrict_test.dat is removed: nothing in the code or the
+       tests refers to 'loop_sm-test' (the parallel tests use the separate
+       restrict_parallel_test.dat, which stays).
    OM: New command 'explain_restriction [PATH|MODEL-RESTRICTION]' which applies
        that same report to a restriction card which already exists (the one the
        current model was loaded with by default, otherwise the path of a card or
