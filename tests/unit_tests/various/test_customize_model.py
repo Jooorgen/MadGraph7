@@ -1266,8 +1266,8 @@ class TestFullListing(unittest.TestCase):
 # 'set default': where the values of the param_card come from
 #===============================================================================
 class TestSetDefault(unittest.TestCase):
-    """The values written in param_NAME.dat are the ones of the UFO, unless
-    the user points at a card or sets a parameter by hand."""
+    """The parameters keep the value they have in the model which was loaded,
+    unless the user points at a card or sets one by hand."""
 
     @classmethod
     def setUpClass(cls):
@@ -1285,17 +1285,17 @@ class TestSetDefault(unittest.TestCase):
     def value_of(self, name):
         return self.ask.get_default_value(self.ask.external_params[name])
 
-    def test_the_ufo_is_the_default(self):
+    def test_nothing_asked(self):
         """MT is 172 in the UFO and 173 in the restriction cards"""
 
+        self.assertEqual(self.ask.default_source, None)
         self.assertEqual(self.value_of('mt'), 172.)
-        self.assertEqual(self.ask.default_card, None)
 
     def test_a_card(self):
         self.ask.do_set('default %s' % self.card)
-        self.assertEqual(self.ask.default_card, self.card)
+        self.assertEqual(self.ask.default_source, self.card)
         self.assertEqual(self.value_of('mt'), 173.)
-        # a parameter the card does not define keeps the value of the UFO
+        # a parameter the card does not define keeps the value it had
         self.assertEqual(self.value_of('mh'), 125.)
 
     def test_one_parameter(self):
@@ -1309,25 +1309,26 @@ class TestSetDefault(unittest.TestCase):
         self.ask.do_set('default MT = 171')
         self.assertEqual(self.value_of('mt'), 171.)
 
-    def test_ufo_only_replaces_the_card(self):
-        """'set default UFO' undoes 'set default PATH', and nothing else: a
-        parameter the user set by hand is their choice, not the card's"""
+    def test_ufo_starts_from_scratch(self):
+        """'set default UFO' undoes every 'set default' entered before it"""
 
         self.ask.do_set('default %s' % self.card)
         self.ask.do_set('default MH = 130')
         self.ask.do_set('default UFO')
-        self.assertEqual(self.ask.default_card, None)
-        self.assertEqual(self.value_of('mt'), 172.)   # the card is gone
-        self.assertEqual(self.value_of('mh'), 130.)   # that one is not
+        self.assertEqual(self.ask.default_source, 'ufo')
+        self.assertEqual(self.ask.default_values, {})
+        self.assertEqual(self.value_of('mt'), 172.)
+        self.assertEqual(self.value_of('mh'), 125.)
 
-    def test_a_card_does_not_undo_a_parameter_either(self):
+    def test_a_card_starts_from_scratch_too(self):
         self.ask.do_set('default MH = 130')
         self.ask.do_set('default %s' % self.card)
-        self.assertEqual(self.value_of('mh'), 130.)
+        self.assertEqual(self.ask.default_values, {})
+        self.assertEqual(self.value_of('mh'), 125.)
 
     def test_refused_inputs(self):
         self.ask.do_set('default /not/a/file.dat')
-        self.assertEqual(self.ask.default_card, None)
+        self.assertEqual(self.ask.default_source, None)
         self.ask.do_set('default NotAParameter = 1')
         self.ask.do_set('default MH = not_a_number')
         self.ask.do_set('default')
@@ -1337,16 +1338,78 @@ class TestSetDefault(unittest.TestCase):
         self.ask.do_set('default %s' % self.card)
         self.ask.do_set('default MH = 130')
         self.ask.do_clear('')
-        self.assertEqual(self.ask.default_card, None)
+        self.assertEqual(self.ask.default_source, None)
         self.assertEqual(self.ask.default_values, {})
 
     def test_the_card_is_built_with_them(self):
-        """apply_default_values is what puts them in the param_card"""
+        """build_default_card is what puts them in the param_card"""
 
+        baseline = self.cmd.get_full_param_card(self.full_model)
         self.ask.do_set('default %s' % self.card)
         self.ask.do_set('default MH = 130')
-        param_card = self.cmd.get_full_param_card(self.full_model)
-        self.assertEqual(param_card['mass'].get([6]).value, 172.)
-        self.cmd.apply_default_values(param_card, self.ask)
+        param_card = self.cmd.build_default_card(self.full_model, baseline,
+                                                 self.ask)
         self.assertEqual(param_card['mass'].get([6]).value, 173.)
         self.assertEqual(param_card['mass'].get([25]).value, 130.)
+
+    def test_ufo_ignores_the_baseline(self):
+        baseline = self.cmd.get_full_param_card(self.full_model)
+        baseline['mass'].get([6]).value = 999.
+        self.ask.do_set('default UFO')
+        param_card = self.cmd.build_default_card(self.full_model, baseline,
+                                                 self.ask)
+        self.assertEqual(param_card['mass'].get([6]).value, 172.)
+
+
+#===============================================================================
+# the values propagated from the model which was loaded
+#===============================================================================
+class TestLoadedDefaults(unittest.TestCase):
+    """customize_model starts from the values of the model as it was loaded,
+    and falls back to the UFO for the parameters that model had fixed."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.sm_path = import_ufo.find_ufo_path('sm')
+        cls.full_model = import_ufo.import_full_model(cls.sm_path)
+
+    def setUp(self):
+        self.cmd = mg_interface.MadGraphCmd()
+        self.externals = self.cmd.get_external_lhacode(self.full_model)
+
+    def test_the_values_of_the_restriction_are_propagated(self):
+        """sm-ckm has MT = 173 while the UFO has 172"""
+
+        reference = import_ufo.import_model(self.sm_path + '-ckm')
+        card, recovered = self.cmd.get_loaded_default_card(self.full_model,
+                                                reference, self.externals)
+        self.assertEqual(card['mass'].get([6]).value, 173.)
+
+    def test_a_parameter_that_restriction_had_fixed(self):
+        """restrict_ckm.dat sets MC and WTau to zero, so they are gone from the
+        model: there is no value to propagate and the UFO one is used"""
+
+        reference = import_ufo.import_model(self.sm_path + '-ckm')
+        card, recovered = self.cmd.get_loaded_default_card(self.full_model,
+                                                reference, self.externals)
+        self.assertTrue(('mass', (4,)) in recovered)
+        self.assertTrue(('decay', (15,)) in recovered)
+        self.assertFalse(('mass', (6,)) in recovered)
+        # and they do keep the value of the UFO
+        self.assertEqual(card['mass'].get([4]).value,
+                         self.cmd.get_full_param_card(
+                                self.full_model)['mass'].get([4]).value)
+
+    def test_an_unrestricted_reference(self):
+        """nothing was fixed, so nothing has to be recovered"""
+
+        card, recovered = self.cmd.get_loaded_default_card(self.full_model,
+                                            self.full_model, self.externals)
+        self.assertEqual(recovered, [])
+        self.assertEqual(card['mass'].get([6]).value, 172.)
+
+    def test_no_reference(self):
+        card, recovered = self.cmd.get_loaded_default_card(self.full_model,
+                                                    None, self.externals)
+        self.assertEqual(recovered, [])
+        self.assertEqual(card['mass'].get([6]).value, 172.)
