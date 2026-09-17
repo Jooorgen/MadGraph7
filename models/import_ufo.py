@@ -376,8 +376,11 @@ def import_model(model_name, decay=False, restrict=True, prefix='mdl_',
                 # sometimes has trouble with relative path
                 logger.info('Restrict model %s with file %s .' % (model_name, restrict_file))
                 
-            if logger_mod.getEffectiveLevel() > 10:
-                logger.info('Run \"set stdout_level DEBUG\" before import to write the details of the model import into a file.')
+            # the details of the restriction go to a log file, and only when
+            # the logger is in debug mode: point at the command which reports
+            # them on the screen instead
+            logger.info('Use \'explain_restriction\' to see what that card '
+                        'removes from the model.')
             # Modify the mother class of the object in order to allow restriction
             model = RestrictModel(model)
 
@@ -2997,7 +3000,8 @@ class RestrictModel(model_reader.ModelReader):
             self.get('order_hierarchy')
             self.get('expansion_order')
 
-        if os.path.exists(param_card.replace('restrict', 'param')):
+        if isinstance(param_card, str) and \
+                              os.path.exists(param_card.replace('restrict', 'param')):
             path = param_card.replace('restrict', 'param')
             logger.info('default value set as in file %s' % path)
             self.set_parameters_and_couplings(path,
