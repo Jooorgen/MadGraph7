@@ -452,6 +452,8 @@ class HelpToCmd(cmd.HelpCmd):
         logger.info("     --bin          Install pre-compiled package from PyPI (non-interactive;")
         logger.info("                    only guaranteed to match this checkout in a release tarball).")
         logger.info("     --source       Build from source (non-interactive).")
+        logger.info("     -j N/--jobs=N  Parallel compilation jobs (source build;")
+        logger.info("                    defaults to the 'nb_core' option).")
         logger.info("     --cuda         Enable CUDA GPU backend (source build).")
         logger.info("     --hip          Enable HIP/ROCm GPU backend (source build).")
         logger.info("     --openblas     Build OpenBLAS from source (default on Linux/Windows, source build).")
@@ -834,6 +836,8 @@ class HelpToCmd(cmd.HelpCmd):
         logger.info("   --output=  : Specify the name of the directory where the merge is done.")
         logger.info("                This allow to do \"import NAME\" to load that merge.")
         logger.info("   --recreate : Force to recreated the merge model even if the merge model directory already exists.")
+        logger.info("   --fock_states_only : only add the Fock states (bound states) of MODELNAME to the current model,")
+        logger.info("                        e.g. 'import model heft' then 'add model sm_onia --fock_states_only'.")
         
     def help_convert(self):
         logger.info("syntax: convert model FULLPATH")
@@ -1399,6 +1403,7 @@ class CheckValidForCmd(cmd.CheckCmd):
 #            if order.strip().lower() != 'qcd':
 #                raise self.InvalidCmd('Polarization restriction can not be used for generic NLO computations')
 
+
             def check(p):
                 # Polarisation restriction can now be used for color charged
                 # particles, so there is no longer a color check here. The mass
@@ -1427,7 +1432,6 @@ class CheckValidForCmd(cmd.CheckCmd):
                             check(p)
                     else:
                         check(p)
-                    
 
 
     def check_tutorial(self, args):
@@ -2550,7 +2554,7 @@ class CompleteForCmd(cmd.CompleteCmd):
         elif args[1] == 'model':
             completion_categories = self.complete_import(text, line, begidx, endidx, 
                                                          allow_restrict=False, formatting=False)
-            completion_categories['options'] = self.list_completion(text,['--modelname=','--recreate'])
+            completion_categories['options'] = self.list_completion(text,['--modelname=','--recreate','--fock_states_only'])
             return self.deal_multiple_categories(completion_categories, formatting) 
             
     def complete_explain_restriction(self, text, line, begidx, endidx):
@@ -3347,7 +3351,7 @@ class MadGraphCmd(HelpToCmd, CheckValidForCmd, CompleteForCmd, CmdExtended):
     _display_opts = ['particles', 'interactions', 'processes', 'diagrams',
                      'diagrams_text', 'multiparticles', 'couplings', 'lorentz',
                      'checks', 'parameters', 'options', 'coupling_order','variable',
-                     'modellist']
+                     'modellist', 'fockstates', 'boundstates']
     _add_opts = ['process', 'model']
     _save_opts = ['model', 'processes', 'options']
     # commands the running tutorial provides, also accepted as `tutorial X`:
@@ -3378,6 +3382,8 @@ class MadGraphCmd(HelpToCmd, CheckValidForCmd, CompleteForCmd, CmdExtended):
 
     _install_opts.extend(_advanced_install_opts)
 
+    # the only outputs with templates projecting bound-state constituents
+    _onia_formats = ['madevent', 'standalone_fortran']
     _v4_export_formats = ['madevent', 'standalone_fortran', 'standalone_msP','standalone_msF',
                           'matrix', 'standalone_rw']
     _export_formats = _v4_export_formats + ['aloha',
@@ -3561,6 +3567,8 @@ class MadGraphCmd(HelpToCmd, CheckValidForCmd, CompleteForCmd, CmdExtended):
             
         # Variables to store state information
         self._multiparticles = {}
+        self._boundstates = {}
+        self._fockstates = []
         self.options = {}
         self._generate_info = "" # store the first generated process
         self._model_v4_path = None
@@ -3614,7 +3622,7 @@ class MadGraphCmd(HelpToCmd, CheckValidForCmd, CompleteForCmd, CmdExtended):
 
     # Add a process to the existing multiprocess definition
     # Generate a new amplitude
-    def do_add(self, line):
+    def do_add(self, line, counter=0):
         """Generate an amplitude for a given process and add to
         existing amplitudes
         or merge two model
@@ -3714,6 +3722,7 @@ This implies that with decay chains:
                                                 " coupling orders constraints.")                    
             else:
                 nb_proc = len([l for l in self.history if l.startswith(('generate','add process'))])
+                nb_proc += counter
                 myprocdef = self.extract_process(line, proc_number=nb_proc)
 
             
@@ -3813,6 +3822,10 @@ This implies that with decay chains:
     def add_model(self, args):
         """merge two model"""
 
+        if '--fock_states_only' in args:
+            args.remove('--fock_states_only')
+            return self.add_fock_states(args[0])
+        
         model_path = args[0]
 
         # adding the taudecay library -> cite the TauDecay paper at output time
@@ -3888,6 +3901,52 @@ This implies that with decay chains:
                               printcmd=False, precmd=True, postcmd=True)         
         
     
+    def add_fock_states(self, model_name):
+        """Import only the Fock states (bound states) of another UFO model on top
+        of the current one, without merging particles or interactions, e.g.
+            import model heft
+            add model sm_onia --fock_states_only
+        A Fock state is only kept if its constituents exist in the current model."""
+
+        import models.import_ufo as import_ufo
+        import models.import_boundstates as ufo_boundstates
+
+        if os.path.isdir(model_name):
+            path = model_name
+        else:
+            try:
+                path = import_ufo.find_ufo_path(model_name)
+            except import_ufo.UFOImportError:
+                # accept a restricted name such as sm_onia-c_mass
+                path = import_ufo.find_ufo_path(model_name.rsplit('-', 1)[0])
+
+        fockstates = ufo_boundstates.get_boundstates_ufo(path)
+        if not fockstates:
+            raise self.InvalidCmd('Model %s does not define any Fock state.' % model_name)
+
+        known = set(f.get('name') for f in self._fockstates)
+        particles = self._curr_model['particles']
+        added, skipped = [], []
+        for fock in fockstates:
+            if not all(particles.get_copy(p) for p in fock.get('particles')):
+                skipped.append(fock.get('name'))
+            elif fock.get('name') not in known:
+                self._fockstates.append(fock)
+                known.add(fock.get('name'))
+                added.append(fock.get('name'))
+
+        if skipped:
+            logger.warning('%i Fock states of %s skipped: their constituents are not in the current model.'
+                           % (len(skipped), model_name))
+        if not added:
+            logger.info('No new Fock state added from %s.' % model_name)
+            return
+
+        logger.info('Added %i Fock states from %s.' % (len(added), model_name))
+        logger.warning('The model contains non-relativistic bound states. Please consider citing arXiv:2510.26773 and arXiv:2607.26739 if relevant.')
+        if not self._boundstates:
+            self.add_default_boundstates()
+
     def do_convert(self, line):
         """convert model FULLPATH
            modify (in place) the UFO model to make it compatible with both python2 and python3
@@ -4144,11 +4203,21 @@ This implies that with decay chains:
             for key in self._multiparticles:
                 print(self.multiparticle_string(key))
 
+        elif args[0] == 'fockstates':
+            print('Current model contains %i Fock states:'%(len(self._fockstates)))
+            print(' '.join([fockstate.get('name') for fockstate in self._fockstates]))
+
+        elif args[0] == 'boundstates':
+            print('Bound state lables:')
+            for key in self._boundstates:
+                print(self.boundstate_string(key))
+
         elif args[0] == 'coupling_order':
             hierarchy = list(self._curr_model['order_hierarchy'].items())
             hierarchy.sort(key=operator.itemgetter(1))
             for order in hierarchy:
                 print(' %s : weight = %s' % order)
+
         elif args[0] == 'couplings' and len(args) == 1:
             if self._model_v4_path:
                 print('No couplings information available in V4 model')
@@ -4398,6 +4467,14 @@ This implies that with decay chains:
             return "%s = %s" % (key, " ".join([self._curr_model.\
                                     get('particle_dict')[part_id].get_name() \
                                     for part_id in self._multiparticles[key]]))
+
+    def boundstate_string(self, key):
+        """Returns a nicely formatted string for the bound state"""
+
+        if key in self._boundstates:
+            return f"{key} = {' '.join(self._boundstates[key])}"
+        else:
+            return f"Boundstate {key} is not defined."
 
     def do_tutorial(self, line):
         """Activate/deactivate the tutorial mode."""
@@ -5578,6 +5655,9 @@ This implies that with decay chains:
         self.clean_process()
         self._generate_info = line
 
+        # reset P-wave onia counter for new process
+        aloha.npwave = [0]
+
         # Call add process
         args = self.split_arg(line)
         args.insert(0, 'process')
@@ -5873,6 +5953,61 @@ This implies that with decay chains:
 
         args = self.split_arg(line)
 
+        # Bound states are only supported without flavour grouping: the onium
+        # templates project two explicit constituents, which a merged
+        # (flavour-indexed) particle cannot provide.
+        if self._curr_model and self._curr_model.get('merged_particles') and \
+                self.has_fock_state(args):
+            self.unmerge_flavors_for_onia()
+
+        # Extract process
+        boundstates = {}
+        boundstates_keys = [key for key in self._boundstates.keys()]
+        boundstates_keys_lower = [key.lower() for key in boundstates_keys]
+        for index,part_name in enumerate(args):
+            if part_name in boundstates_keys_lower:
+                bound_name = boundstates_keys[boundstates_keys_lower.index(part_name)]
+                boundstates[index] = self._boundstates[bound_name]
+
+        if boundstates:
+            # find all combinations of Fock states
+            for index,key in enumerate(boundstates.keys()):
+                if index==0:
+                    all_combinations = [[(key,b)] for b in boundstates[key]]
+                else:
+                    all_combinations = [c+[(key,b)] for c in all_combinations for b in boundstates[key]]
+            # filter symmetric final states
+            already_generated = []
+            unique_combinations = []
+            for fockstates in all_combinations:
+                state = sorted([fockstate[1] for fockstate in fockstates])
+                if state not in already_generated:
+                    unique_combinations.append(fockstates)
+                    already_generated.append(state)
+
+            # add processes
+            last = len(unique_combinations)-1
+            for idx,fockstates in enumerate(unique_combinations):
+                copy_args = args
+                for index,fockstate in fockstates:
+                    copy_args[index] = fockstate
+                process = f" ".join(["process"]+copy_args)
+                logger.info("INFO: Trying to generate "+process)
+                if not idx==last:
+                    for order in model_orders:
+                        try:
+                            (order_val,order_op) = squared_orders[order]
+                        except KeyError:
+                            try:
+                                order_val = orders[order]
+                                order_op = '='
+                            except KeyError:
+                                continue
+                        process += " "+order+order_op+str(order_val)
+                    self.do_add(process)
+                else:
+                    args = [arg.lower() for arg in copy_args]
+
         myleglist = base_objects.MultiLegList()
         state = False
 
@@ -5882,6 +6017,8 @@ This implies that with decay chains:
         else:
             upc_with_jet = False
 
+        onium_index = 0
+        aloha.dual_mode = 0
         # Extract process
         for part_name in args:
             if part_name == '>':
@@ -5895,6 +6032,22 @@ This implies that with decay chains:
                 offshell = True
             else:
                 offshell = False
+
+            # check if particle is ONIA
+            is_onium = False
+            for fockstate in self._fockstates:
+                if part_name == fockstate.get('name').lower():
+                    is_onium = True
+                    onium_info = fockstate
+                    break
+                elif part_name.lstrip('-').isdigit() and int(part_name)==fockstate.get('pdg_code'):
+                    is_onium = True
+                    onium_info = fockstate
+                    break
+
+            # check that only final-state particles are ONIA
+            if is_onium and not state:
+                raise self.InvalidCmd("initial particles cannot be onia")
 
             # check if the particle is tagged (!PART!)
             if part_name.startswith('!') and part_name.endswith('!'):
@@ -6070,6 +6223,45 @@ This implies that with decay chains:
                                     flavor.append(pid)
                         else:
                             mylegids.append(pid)
+
+            elif is_onium:
+                onium_name = onium_info.get('name')
+                onium_id = onium_info.get('pdg_code')
+                onium_principal = onium_info.get('principal')
+                onium_spin = int((onium_info.get('spin')-1)/2)
+                onium_orbit = onium_info.get('orbital')
+                onium_j = onium_info.get('J')
+                onium_color = onium_info.get('color')
+                onium_charge = onium_info.get('charge')
+                constituents = onium_info.get('particles')
+                try:
+                    onium_mass = onium_info.get('mass')
+                except AttributeError:
+                    onium_mass = -1.
+                try:
+                    onium_ldme = onium_info.get('ldme')
+                except AttributeError:
+                    onium_ldme = 1.
+
+                # use dual mode for P-wave ONIA
+                
+                if onium_orbit >= 1:
+                    aloha.dual_mode += 1
+                for i in range(2):
+                    mypart = self._curr_model['particles'].get_copy(constituents[i])
+
+                    myleglist.append(base_objects.MultiLeg({'ids':[mypart.get_pdg_code()],
+                                                        'state':state,
+                                                        'polarization': polarization,
+                                                        'onium': {'id':onium_id, 'name':onium_name,
+                                                                  'N':onium_principal, 'S':onium_spin,
+                                                                  'L':onium_orbit, 'J':onium_j,
+                                                                  'C':onium_color, 'charge':onium_charge,
+                                                                  'index':onium_index, 'mass':onium_mass,
+                                                                  'ldme':onium_ldme
+                                                                 }
+                                                        	}))
+                onium_index += 1
             elif part_name.isdigit() or part_name.startswith('-') and part_name[1:].isdigit():
                 if abs(int(part_name)) in sum(self._curr_model.merged_particles.values(),[]):
                    for pdg in self._curr_model.merged_particles: 
@@ -6113,14 +6305,32 @@ This implies that with decay chains:
                                                             'state':state,
                                                             'polarization': polarization,
                                                             'flavor': flavor,
+                                                            'onium': {},
                                                             'offshell': offshell}))
                     else:
                         myleglist.append(fks_tag.MultiTagLeg({'ids':mylegids,
                                                           'state':state,
                                                           'polarization': polarization,
+                                                          'onium': {},
                                                           'is_tagged':is_tagged}))
+            elif is_onium:
+                pass
             else:
                 raise self.InvalidCmd("No particle %s in model" % part_name)
+
+        # Bound states are handled by the LO exporters only: nothing in the
+        # FKS/loop path reads back the 'onium' leg properties and there is no
+        # onia matrix-element template for it, so a perturbed process would
+        # silently produce a wrong result rather than fail.
+        if onium_index and perturbation_couplings.strip():
+            raise self.InvalidCmd(
+                "Onia are only supported at leading order: the perturbation "
+                "'[%s]' can not be combined with a bound state."
+                % perturbation_couplings.strip())
+
+        if aloha.dual_mode:
+            aloha.npwave.append(aloha.dual_mode)
+            aloha.npwave = list(set(aloha.npwave))
 
         if any(['is_tagged' in l.keys()  and l['is_tagged'] and l['state'] for l in myleglist]):
             logger.warning('The process involves tagged particles. Please consider citing arXiv:2106.02059 if relevant.')
@@ -6903,6 +7113,14 @@ This implies that with decay chains:
                                         self._curr_model.get('interactions')], []))
 
         self.add_default_multiparticles()
+        # A new model starts without any Fock state: those of a previously
+        # imported model must not leak in. Use 'add model X --fock_states_only'
+        # to put the bound states of one model on top of another.
+        self._boundstates = {}
+        self.add_default_fockstates()
+        if self._fockstates:
+            logger.warning('The model contains non-relativistic bound states. Please consider citing arXiv:2510.26773 and arXiv:2607.26739 if relevant.')
+            self.add_default_boundstates()
 
 
     def import_mg4_proc_card(self, filepath):
@@ -6978,23 +7196,27 @@ This implies that with decay chains:
 
         scheme = "old"
         photon = False
+        # The flavour scheme is a property of the model: the heaviest quark
+        # that is still massless (Model.get_flavour_scheme). The run_card
+        # default for maxjetflavor is derived from the very same number, so
+        # the jet definition and maxjetflavor always agree.
+        nflav = self._curr_model.get_flavour_scheme()
         for qcd_container in ['p', 'j']:
             if qcd_container not in self._multiparticles:
                 continue
             multi = self._multiparticles[qcd_container]
-            b = self._curr_model.get_particle(5)
-            if not b:
+            if nflav is None:
                 break
 
-            if 5 in multi:
-                if b['mass'] != 'ZERO':
-                    multi.remove(5)
-                    multi.remove(-5)
-                    scheme = 4
-            elif b['mass'] == 'ZERO':
-                multi.append(5)
-                multi.append(-5)
-                scheme = 5
+            for pdg in (4, 5):
+                if pdg <= nflav and pdg not in multi:
+                    multi.extend([pdg, -pdg])
+                    scheme = nflav
+                elif pdg > nflav and pdg in multi:
+                    multi.remove(pdg)
+                    if -pdg in multi:
+                        multi.remove(-pdg)
+                    scheme = nflav
 
             # check if the photon has to be added to j and p
             if 'perturbation_couplings' in list(self._curr_model.keys()) and \
@@ -7006,9 +7228,14 @@ This implies that with decay chains:
                 multi.remove(22)
                 photon = False
                 
-        if scheme in [4,5] and not photon:
+        if scheme in [3,4,5] and not photon:
             self.optimize_order(multi)
-            self._multiparticles[qcd_container] = multi
+            # only re-register the containers that still exist: a model may
+            # define a real particle called 'j' (or 'p'), in which case the
+            # multiparticle was dropped above and must not come back.
+            for container in ['p', 'j']:
+                if container in self._multiparticles:
+                    self._multiparticles[container] = multi
             logger.warning("Pass the definition of \'j\' and \'p\' to %s flavour scheme." % scheme)
             for container in ['p', 'j']:
                 if container in defined_multiparticles:
@@ -7070,6 +7297,92 @@ This implies that with decay chains:
         if os.path.commonpath([prefix, MG5DIR]) == MG5DIR:
             return prefix, ''
         return prefix, misc.user_config_file(create=True) or ''
+
+    def add_default_boundstates(self):
+        """Add default bound states from file boundstates_default.txt in the input folder"""
+
+        # Load default bound states from boundstates_default.txt
+        boundstates_file = pjoin(MG5DIR, 'input', 'boundstates_default.txt')
+        # Check if the file exists!
+        if not os.path.isfile(boundstates_file):
+            logger.warning(f"Bound states file {boundstates_file} not found.")
+            return
+
+        with open(boundstates_file) as f:
+            for line in f:
+                if line.startswith('#'):
+                    continue
+                # The first item on the line is the quarkonium, the rest is the list of Fock states
+                boundstate_label, bound_state = line.split("=", 1)
+                boundstate_label = boundstate_label.strip()
+                bound_state = bound_state.strip()
+                fock_states = bound_state.strip().split()
+                self._boundstates[boundstate_label] = fock_states
+
+                logger.info(f"Defined boundstate {boundstate_label} = {bound_state}")
+
+    def has_onium_amplitude(self):
+        """True if one of the generated processes has a bound state."""
+
+        for amp in self._curr_amps or []:
+            try:
+                amps = amp.get_amplitudes() if hasattr(amp, 'get_amplitudes') else [amp]
+                for one_amp in amps:
+                    if any(leg.get('onium') for leg in one_amp.get('process').get('legs')):
+                        return True
+            except Exception:
+                # amplitude containers of other interfaces (NLO, ...) never
+                # hold a bound state: onia are refused there at generation
+                continue
+        return False
+
+    def has_fock_state(self, args):
+        """True if one of the process tokens names a Fock state or a bound-state
+        label (which expands into Fock states)."""
+
+        names = set(f.get('name').lower() for f in self._fockstates)
+        pdgs = set(str(f.get('pdg_code')) for f in self._fockstates)
+        labels = set(k.lower() for k in self._boundstates)
+        for arg in args:
+            arg = arg.lower().rstrip('*')
+            if arg in names or arg in labels or arg in pdgs:
+                return True
+        return False
+
+    def unmerge_flavors_for_onia(self):
+        """Reload the current model without flavour grouping, keeping the
+        multiparticles and the Fock states the user already has."""
+
+        if self._curr_amps:
+            raise self.InvalidCmd("Bound states require the model without flavour "
+                "grouping, but processes were already generated with it. Use "
+                "'set apply_flavor_grouping False' (and re-import the model) "
+                "before the first generate.")
+
+        model_name = self._curr_model.get('modelpath+restriction')
+        logger.info("Bound states are not supported with flavour grouping: "
+                    "reloading the model without it (apply_flavor_grouping = False).")
+        saved_multiparticles = copy.deepcopy(self._multiparticles)
+        saved_fockstates = list(self._fockstates)
+        saved_boundstates = dict(self._boundstates)
+        # the import resets the generate line, which output needs for the
+        # proc card (procdef_mg5.dat)
+        saved_generate_info = self._generate_info
+        self.exec_cmd('set apply_flavor_grouping False', precmd=False)
+        self.exec_cmd('import model %s' % model_name, precmd=False)
+        assert not self._curr_model.get('merged_particles')
+        self._multiparticles = saved_multiparticles
+        self._fockstates = saved_fockstates
+        self._boundstates = saved_boundstates
+        self._generate_info = saved_generate_info
+
+    def add_default_fockstates(self):
+        """Load the Fock states shipped by the current model (its boundstates.py),
+        replacing any Fock state of a previously imported model."""
+        import models.import_boundstates as ufo_boundstates
+        self._fockstates = ufo_boundstates.get_boundstates_ufo(self._curr_model)
+
+        return self._fockstates
 
     def advanced_install(self, tool_to_install,
                                HepToolsInstaller_web_address=None,
@@ -7490,7 +7803,14 @@ MadGraph7 that supports quadruple precision (typically g++ based on gcc 4.6+).""
             return
         elif args[0] == 'madspace':
             install_script = pjoin(MG5DIR, 'madspace', 'install.py')
-            subprocess.run([sys.executable, install_script] + args[1:])
+            install_args = args[1:]
+            # The source build compiles in parallel only if it is told how many
+            # jobs it may use (see set_build_parallelism in install.py), so hand
+            # it MG5's nb_core unless an explicit -j was given on the line.
+            if not any(a == '-j' or a.startswith('-j') or a.startswith('--jobs')
+                       for a in install_args):
+                install_args = install_args + ['-j', str(self.options['nb_core'])]
+            subprocess.run([sys.executable, install_script] + install_args)
             return
 
         plugin = self.install_plugin
@@ -8658,7 +8978,8 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
             # sys.argv/sys.stdin, but in process those describe MG5, not the run.
             from madgraph.iolibs.template_files.mg7 import bootstrap as mg7_bootstrap
             mg7_bootstrap.ensure_madspace(
-                interactive=bool(self.use_rawinput) and not options['force'])
+                interactive=bool(self.use_rawinput) and not options['force'],
+                jobs=self.options['nb_core'])
             from madgraph.iolibs.template_files.mg7 import launch as mg7_launch
 
             MG7 = mg7_launch.MG7Cmd(me_dir=me_dir, options=self.options)
@@ -11277,6 +11598,12 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
         self._export_plugin = None
         self.check_output(args)
 
+        if self._export_format not in self._onia_formats + ['aloha'] and \
+                self.has_onium_amplitude():
+            raise self.InvalidCmd("Bound states (onia) can only be written out "
+                    "with 'output %s', not with 'output %s'."
+                    % ("' or 'output ".join(self._onia_formats), self._export_format))
+
         noclean = '-noclean' in args
         force = '-f' in args
         nojpeg = '-nojpeg' in args
@@ -11966,14 +12293,21 @@ in the MadGraph7 option 'samurai' (instead of leaving it to its default 'auto').
                 self.previous_lorentz = wanted_lorentz
                 self.previous_couplings = wanted_couplings
             else:
-                self._curr_exporter.convert_model(self._curr_model, 
-                                               wanted_lorentz,
-                                               wanted_couplings)
+                for npwave in aloha.npwave:
+                    aloha.dual_mode = npwave
+                    self._curr_exporter.convert_model(self._curr_model,
+                                                   wanted_lorentz,
+                                                   wanted_couplings,
+                                                   npwave=npwave)
+                aloha.dual_mode = 0
                 if hasattr(self, '_me_curr_exporter') and self._me_curr_exporter:
                     self._me_curr_exporter.convert_model(self._curr_model, 
                                                wanted_lorentz,
                                                wanted_couplings)
 
+            # exporting the files related to bound states
+            if self._export_format in self._onia_formats:
+                self._curr_exporter.export_onia_files(self._curr_matrix_elements)
         
         # move the old options to the flaglist system.
         if nojpeg:
